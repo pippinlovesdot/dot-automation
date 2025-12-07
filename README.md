@@ -206,6 +206,12 @@ Visual content generation supports two providers:
 - **Nano Banana 2 Pro** (Gemini 3 Pro Image) — Our default. Fast, high quality, excellent prompt following
 - **GPT-5 Image** — Native OpenAI generation with strong context awareness
 
+### Web Search
+
+Real-time web search capability powered by **Perplexity** via OpenRouter:
+
+- **Perplexity Sonar** — Online search model for current information, news, and facts. Automatically invoked by the LLM when it needs fresh data. Integrated through OpenRouter for unified API access.
+
 ### Twitter Integration
 
 Official Twitter API v2 for all operations: posting, timeline reading, media uploads, mention monitoring. We don't use unofficial endpoints or scraping.

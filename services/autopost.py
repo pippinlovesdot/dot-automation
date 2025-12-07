@@ -100,8 +100,7 @@ Requirements:
             # Generate image only if include_picture is True AND image generation is enabled
             media_ids = None
             if include_picture and settings.enable_image_generation:
-                # Customize this prompt for your bot's image style
-                image_prompt = "Generate an image that matches the tweet's vibe"
+                image_prompt = ""  # Customize for your bot's image style
                 try:
                     image_bytes = await self.image_gen.generate(image_prompt)
                     media_id = await self.twitter.upload_media(image_bytes)

@@ -159,6 +159,82 @@ Everything is modular. Swap the LLM provider, add new tools, adjust posting sche
 
 ---
 
+## Services Documentation
+
+### Auto-posting (`services/autopost.py`)
+
+The bot automatically generates and posts tweets at configurable intervals using APScheduler.
+
+**How it works:**
+1. Fetches recent posts from database to provide context (avoids repetition)
+2. Sends personality prompt + context to LLM with structured output format
+3. LLM returns `{text: "...", include_picture: true/false}`
+4. If `include_picture` is true and image generation is enabled, generates an image
+5. Posts tweet to Twitter (with optional media)
+6. Saves post to database for future context
+
+**Configuration:**
+- `POST_INTERVAL_MINUTES` — Time between auto-posts (default: 30)
+- `ENABLE_IMAGE_GENERATION` — Set to `false` to disable all image generation
+
+### Image Generation (`services/image_gen.py`)
+
+Generates images using Gemini 3 Pro via OpenRouter, with support for reference images.
+
+**How `assets/` folder works:**
+- Place 1 or more reference images in `assets/` folder (supports: jpg, png, jpeg, gif, webp)
+- Bot randomly selects up to 2 images as style/character reference
+- Reference images are sent to the model along with the generation prompt
+- If `assets/` is empty, images are generated without reference (pure text-to-image)
+- Use reference images to maintain consistent character appearance across posts
+
+**Example use case:** Place photos of your bot's character/avatar in `assets/`. The model will use these as reference when generating new images, keeping the visual style consistent.
+
+### Personality (`config/personality.py`)
+
+Contains `SYSTEM_PROMPT` that defines your bot's entire character — how it thinks, writes, and behaves.
+
+**What to customize:**
+- Personality traits and worldview
+- Communication style (formal, casual, chaotic, lowercase, etc.)
+- Topics to discuss and topics to avoid
+- Emoji and punctuation preferences
+- Example tweets that capture the vibe
+- Behavioral rules (no hashtags, no engagement bait, etc.)
+
+The more detailed your personality prompt, the more consistent and authentic your bot will feel.
+
+### Database (`services/database.py`)
+
+PostgreSQL storage for post history, enabling context-aware generation.
+
+**Tables:**
+- `posts` — Stores all posted tweets (text, tweet_id, include_picture, created_at)
+- `mentions` — Stores mention interactions (prepared for future mention handling)
+
+**Why it matters:** By storing post history, the bot can reference its previous tweets and avoid repetition. The LLM sees the last 50 posts as context when generating new content.
+
+### LLM Client (`services/llm.py`)
+
+Async client for OpenRouter API with structured output support.
+
+**Features:**
+- Uses Claude Sonnet 4.5 by default (configurable)
+- Supports structured JSON output for reliable parsing
+- Handles both simple text generation and complex formatted responses
+
+### Twitter Client (`services/twitter.py`)
+
+Handles all Twitter API interactions using tweepy.
+
+**Capabilities:**
+- Post tweets (API v2)
+- Upload media (API v1.1 — required for images)
+- Reply to tweets (prepared for mention handling)
+- Automatic rate limit handling
+
+---
+
 ## Capabilities
 
 🧠 **Deep Personality Generation** — Complete character profiles with backstory, beliefs, values, and speech patterns. Not templates — synthesized personalities.

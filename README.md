@@ -183,11 +183,12 @@ Python 3.10+ with async I/O, full type hints, and modular architecture. The code
 
 **Core libraries:**
 - `fastapi` — HTTP server for webhooks
+- `uvicorn` — ASGI server
 - `apscheduler` — Cron-based job scheduling
 - `httpx` — Async HTTP client
 - `tweepy` — Twitter API v2 integration
 - `asyncpg` — Async PostgreSQL driver
-- `pydantic` — Settings and validation
+- `pydantic` + `pydantic-settings` — Settings and validation
 
 ### LLM Inference
 
@@ -247,7 +248,7 @@ Runs anywhere Python runs: VPS, Railway, Render, Docker, your laptop. Stateless 
 ### Requirements
 
 - **OpenRouter API Key** — For LLM inference. Gives access to Claude, GPT, Gemini through one endpoint.
-- **Twitter API v2** — For posting and reading. Basic tier works for posting; Pro tier needed for mentions.
+- **Twitter API v2** — For posting and reading. Free tier works for posting; Basic tier needed for mentions. Pro tier increases rate limits.
 - **PostgreSQL** — For conversation history. Any provider works (Railway, Supabase, Neon, self-hosted).
 - **Python 3.10+** — Runtime environment with async support.
 - **Image API Key** *(optional)* — Gemini API or OpenAI for image generation.

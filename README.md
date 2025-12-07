@@ -126,6 +126,82 @@ This separation keeps the codebase simple while enabling both proactive and reac
 
 ---
 
+## Capabilities
+
+🧠 **Deep Personality Generation** — Complete character profiles with backstory, beliefs, values, and speech patterns. Not templates — synthesized personalities.
+
+🐦 **Autonomous Posting** — Schedule-based or trigger-based content generation. Your agent posts in its authentic voice without manual intervention.
+
+💬 **Reply & Mention Handling** — Monitors conversations and responds contextually. LLM decides whether to reply, use tools, or ignore. Requires Twitter API Pro tier for mention access.
+
+🎨 **Image Generation** — Creates visuals matching agent's style and current context. Supports multiple providers.
+
+🔧 **Extensible Tools** — Plug in web search, external APIs, blockchain data, custom integrations. The tool system is designed for expansion.
+
+📦 **Production-Ready** — Clean async Python with type hints. Add API keys and deploy — no additional setup required.
+
+---
+
+## Tech Stack
+
+### Runtime
+
+Python 3.10+ with async I/O, full type hints, and modular architecture. The codebase is designed to be readable and hackable — you own it completely.
+
+**Core libraries:**
+- `fastapi` — HTTP server for webhooks
+- `uvicorn` — ASGI server
+- `apscheduler` — Cron-based job scheduling
+- `httpx` — Async HTTP client
+- `tweepy` — Twitter API v2 integration
+- `asyncpg` — Async PostgreSQL driver
+- `pydantic` + `pydantic-settings` — Settings and validation
+
+### LLM Inference
+
+All language model calls go through **OpenRouter**, giving you access to multiple providers through a single API:
+
+- **Claude Sonnet 4.5** — Primary model for personality synthesis and content generation
+- **GPT-5** — Alternative provider with strong reasoning capabilities  
+- **Gemini 3 Pro** — Fast inference, good for high-volume interactions
+
+Model selection is configurable per-agent. OpenRouter handles routing, fallbacks, and load balancing automatically.
+
+### Image Generation
+
+Visual content generation supports two providers:
+
+- **Nano Banana 2 Pro** (Gemini 3 Pro Image) — Our default. Fast, high quality, excellent prompt following
+- **GPT-5 Image** — Native OpenAI generation with strong context awareness
+
+### Web Search
+
+Real-time web search capability powered by **Perplexity** via OpenRouter:
+
+- **Perplexity Sonar** — Online search model for current information, news, and facts. Automatically invoked by the LLM when it needs fresh data. Integrated through OpenRouter for unified API access.
+
+### Twitter Integration
+
+Official Twitter API v2 for all operations: posting, timeline reading, media uploads, mention monitoring. We don't use unofficial endpoints or scraping.
+
+### Deployment
+
+Runs anywhere Python runs: VPS, Railway, Render, Docker, your laptop. Stateless design means easy horizontal scaling if needed.
+
+---
+
+## Architecture Principles
+
+**Modular** — Swap LLM providers, image generators, or tools without touching core logic. Each component has clean interfaces.
+
+**Local credentials** — Your API keys never leave your machine. We generate code, not hosted services.
+
+**Stateless** — Agent state serializes to JSON. Easy to backup, migrate, or run multiple instances.
+
+**Clean code** — Readable, typed, documented. This is your codebase now — you should be able to understand and modify it.
+
+---
+
 ## Project Structure
 
 When you generate an agent, you receive a complete Python project:
@@ -232,82 +308,6 @@ Handles all Twitter API interactions using tweepy.
 - Upload media (API v1.1 — required for images)
 - Reply to tweets (prepared for mention handling)
 - Automatic rate limit handling
-
----
-
-## Capabilities
-
-🧠 **Deep Personality Generation** — Complete character profiles with backstory, beliefs, values, and speech patterns. Not templates — synthesized personalities.
-
-🐦 **Autonomous Posting** — Schedule-based or trigger-based content generation. Your agent posts in its authentic voice without manual intervention.
-
-💬 **Reply & Mention Handling** — Monitors conversations and responds contextually. LLM decides whether to reply, use tools, or ignore. Requires Twitter API Pro tier for mention access.
-
-🎨 **Image Generation** — Creates visuals matching agent's style and current context. Supports multiple providers.
-
-🔧 **Extensible Tools** — Plug in web search, external APIs, blockchain data, custom integrations. The tool system is designed for expansion.
-
-📦 **Production-Ready** — Clean async Python with type hints. Add API keys and deploy — no additional setup required.
-
----
-
-## Tech Stack
-
-### Runtime
-
-Python 3.10+ with async I/O, full type hints, and modular architecture. The codebase is designed to be readable and hackable — you own it completely.
-
-**Core libraries:**
-- `fastapi` — HTTP server for webhooks
-- `uvicorn` — ASGI server
-- `apscheduler` — Cron-based job scheduling
-- `httpx` — Async HTTP client
-- `tweepy` — Twitter API v2 integration
-- `asyncpg` — Async PostgreSQL driver
-- `pydantic` + `pydantic-settings` — Settings and validation
-
-### LLM Inference
-
-All language model calls go through **OpenRouter**, giving you access to multiple providers through a single API:
-
-- **Claude Sonnet 4.5** — Primary model for personality synthesis and content generation
-- **GPT-5** — Alternative provider with strong reasoning capabilities  
-- **Gemini 3 Pro** — Fast inference, good for high-volume interactions
-
-Model selection is configurable per-agent. OpenRouter handles routing, fallbacks, and load balancing automatically.
-
-### Image Generation
-
-Visual content generation supports two providers:
-
-- **Nano Banana 2 Pro** (Gemini 3 Pro Image) — Our default. Fast, high quality, excellent prompt following
-- **GPT-5 Image** — Native OpenAI generation with strong context awareness
-
-### Web Search
-
-Real-time web search capability powered by **Perplexity** via OpenRouter:
-
-- **Perplexity Sonar** — Online search model for current information, news, and facts. Automatically invoked by the LLM when it needs fresh data. Integrated through OpenRouter for unified API access.
-
-### Twitter Integration
-
-Official Twitter API v2 for all operations: posting, timeline reading, media uploads, mention monitoring. We don't use unofficial endpoints or scraping.
-
-### Deployment
-
-Runs anywhere Python runs: VPS, Railway, Render, Docker, your laptop. Stateless design means easy horizontal scaling if needed.
-
----
-
-## Architecture Principles
-
-**Modular** — Swap LLM providers, image generators, or tools without touching core logic. Each component has clean interfaces.
-
-**Local credentials** — Your API keys never leave your machine. We generate code, not hosted services.
-
-**Stateless** — Agent state serializes to JSON. Easy to backup, migrate, or run multiple instances.
-
-**Clean code** — Readable, typed, documented. This is your codebase now — you should be able to understand and modify it.
 
 ---
 

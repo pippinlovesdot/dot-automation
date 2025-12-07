@@ -327,7 +327,6 @@ Handles all Twitter API interactions using tweepy.
 - **Twitter API v2** — For posting and reading. Free tier works for posting; Basic tier needed for mentions. Pro tier increases rate limits.
 - **PostgreSQL** — For conversation history. Any provider works (Railway, Supabase, Neon, self-hosted).
 - **Python 3.10+** — Runtime environment with async support.
-- **Image API Key** *(optional)* — Gemini API or OpenAI for image generation.
 
 ---
 

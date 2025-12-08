@@ -56,11 +56,11 @@ class Database:
                 END $$;
             """)
 
-            # Mentions table (for future use)
+            # Mentions table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS mentions (
                     id SERIAL PRIMARY KEY,
-                    tweet_id VARCHAR(50),
+                    tweet_id VARCHAR(50) UNIQUE,
                     author_handle VARCHAR(50),
                     author_text TEXT,
                     our_reply TEXT,
@@ -171,7 +171,7 @@ class Database:
             author_handle: Twitter handle of the author.
             author_text: Text of the mention.
             our_reply: Our reply text (None if ignored).
-            action: Action taken ('replied', 'ignored', 'tool_used').
+            action: Action taken ('replied', 'ignored').
 
         Returns:
             Database ID of the saved mention.
@@ -194,3 +194,58 @@ class Database:
             )
             logger.info(f"Saved mention {row['id']} with action '{action}'")
             return row["id"]
+
+    async def get_recent_mentions_formatted(self, limit: int = 10) -> str:
+        """
+        Get recent mentions formatted for LLM context.
+
+        Args:
+            limit: Maximum number of mentions to retrieve.
+
+        Returns:
+            Formatted string with recent mentions and replies.
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected")
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT author_handle, author_text, our_reply
+                FROM mentions
+                WHERE our_reply IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT $1
+                """,
+                limit
+            )
+
+            if not rows:
+                return "No previous mention replies."
+
+            history = []
+            for i, row in enumerate(reversed(rows), 1):  # Oldest first
+                history.append(f"{i}. @{row['author_handle']}: {row['author_text']}")
+                history.append(f"   Your reply: {row['our_reply']}")
+
+            return "\n".join(history)
+
+    async def mention_exists(self, tweet_id: str) -> bool:
+        """
+        Check if a mention has already been processed.
+
+        Args:
+            tweet_id: Tweet ID to check.
+
+        Returns:
+            True if mention exists in database.
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM mentions WHERE tweet_id = $1",
+                tweet_id
+            )
+            return row is not None

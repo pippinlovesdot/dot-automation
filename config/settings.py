@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     database_url: str
 
     # Bot configuration
-    post_interval_minutes: int
-    enable_image_generation: bool
+    post_interval_minutes: int = 30
+    mentions_interval_minutes: int = 20
+    enable_image_generation: bool = True
 
 
 # Global settings instance

@@ -1,7 +1,7 @@
 """
 Twitter client using tweepy for Twitter API v2.
 
-Handles posting tweets, replies, and media uploads.
+Handles posting tweets, replies, media uploads, and fetching mentions.
 """
 
 import logging
@@ -121,4 +121,71 @@ class TwitterClient:
             return media_id
         except Exception as e:
             logger.error(f"Error uploading media: {e}")
+            raise
+
+    def get_me(self) -> dict[str, Any]:
+        """
+        Get authenticated user info.
+
+        Returns:
+            User data including id and username.
+        """
+        try:
+            response = self.client.get_me()
+            return {"id": response.data.id, "username": response.data.username}
+        except Exception as e:
+            logger.error(f"Error getting user info: {e}")
+            raise
+
+    def get_mentions(self, since_id: str | None = None) -> list[dict[str, Any]]:
+        """
+        Get recent mentions of authenticated user.
+
+        Args:
+            since_id: Only get mentions newer than this tweet ID.
+
+        Returns:
+            List of mention tweets with author info.
+        """
+        try:
+            # Get authenticated user ID
+            me = self.get_me()
+            user_id = me["id"]
+
+            # Fetch mentions
+            response = self.client.get_users_mentions(
+                id=user_id,
+                since_id=since_id,
+                max_results=10,
+                expansions=["author_id"],
+                tweet_fields=["created_at", "text", "author_id"],
+                user_fields=["username"]
+            )
+
+            if not response.data:
+                logger.info("No new mentions found")
+                return []
+
+            # Build user lookup from includes
+            users = {}
+            if response.includes and "users" in response.includes:
+                for user in response.includes["users"]:
+                    users[user.id] = user.username
+
+            # Format mentions
+            mentions = []
+            for tweet in response.data:
+                mentions.append({
+                    "id_str": str(tweet.id),
+                    "text": tweet.text,
+                    "user": {
+                        "screen_name": users.get(tweet.author_id, "unknown")
+                    }
+                })
+
+            logger.info(f"Found {len(mentions)} new mentions")
+            return mentions
+
+        except Exception as e:
+            logger.error(f"Error fetching mentions: {e}")
             raise

@@ -115,12 +115,12 @@ Each layer feeds into the next. Your agent behaves consistently across thousands
 
 The system operates on **two triggers**:
 
-| Scheduled Posts | Reactive Engagement |
-|-----------------|---------------------|
-| Cron-based (configurable interval) | Webhook-triggered |
+| Scheduled Posts | Mention Responses |
+|-----------------|-------------------|
+| Cron-based (configurable interval) | Polling-based (configurable interval) |
 | Generates original content | Handles mentions & replies |
-| Creates matching images | LLM decides: respond or ignore |
-| Posts to Twitter | Can use tools (web search, etc.) |
+| Creates matching images | LLM chooses which mention to reply to |
+| Posts to Twitter | LLM generates response + optional image |
 
 This separation keeps the codebase simple while enabling both proactive and reactive behavior.
 
@@ -253,6 +253,25 @@ The bot automatically generates and posts tweets at configurable intervals using
 - `POST_INTERVAL_MINUTES` — Time between auto-posts (default: 30)
 - `ENABLE_IMAGE_GENERATION` — Set to `false` to disable all image generation
 
+### Mention Handler (`services/mentions.py`)
+
+Monitors Twitter mentions and generates contextual replies using polling.
+
+**How it works:**
+1. Polls Twitter API for new mentions every 20 minutes (configurable)
+2. Filters out already-processed mentions using database
+3. Sends all new mentions to LLM in a single request
+4. LLM selects which mention to reply to (or none if not worth replying)
+5. LLM returns structured response: `{selected_tweet_id, text, include_picture, reasoning}`
+6. If a mention is selected, generates optional image and posts reply
+7. Saves mention interaction to database for history
+
+**Why single-call selection:** Instead of replying to every mention, the LLM evaluates all pending mentions and picks the most interesting one. This creates more authentic engagement — your agent chooses conversations worth having, just like a real person would.
+
+**Configuration:**
+- `MENTIONS_INTERVAL_MINUTES` — Time between mention checks (default: 20)
+- Requires Twitter API Basic tier or higher for mention access
+
 ### Image Generation (`services/image_gen.py`)
 
 Generates images using Gemini 3 Pro via OpenRouter, with support for reference images.
@@ -282,13 +301,15 @@ The more detailed your personality prompt, the more consistent and authentic you
 
 ### Database (`services/database.py`)
 
-PostgreSQL storage for post history, enabling context-aware generation.
+PostgreSQL storage for post history and mention tracking, enabling context-aware generation.
 
 **Tables:**
 - `posts` — Stores all posted tweets (text, tweet_id, include_picture, created_at)
-- `mentions` — Stores mention interactions (prepared for future mention handling)
+- `mentions` — Stores mention interactions (tweet_id, author_handle, author_text, our_reply, action)
 
-**Why it matters:** By storing post history, the bot can reference its previous tweets and avoid repetition. The LLM sees the last 50 posts as context when generating new content.
+**Why it matters:**
+- Post history lets the bot reference previous tweets and avoid repetition. The LLM sees the last 50 posts as context.
+- Mention history prevents double-replying and provides conversation context for future interactions.
 
 ### LLM Client (`services/llm.py`)
 
@@ -306,7 +327,9 @@ Handles all Twitter API interactions using tweepy.
 **Capabilities:**
 - Post tweets (API v2)
 - Upload media (API v1.1 — required for images)
-- Reply to tweets (prepared for mention handling)
+- Reply to tweets
+- Fetch mentions (polling-based)
+- Get authenticated user info
 - Automatic rate limit handling
 
 ---

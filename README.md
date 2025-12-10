@@ -228,10 +228,15 @@ my-agent/
 │
 ├── main.py                  # FastAPI + APScheduler entry point
 ├── requirements.txt         # Dependencies
-└── .env.example             # API keys template
+├── .env.example             # API keys template
+└── ARCHITECTURE.md          # AI-readable technical documentation
 ```
 
 Everything is modular. Swap the LLM provider, add new tools, adjust posting schedules — the architecture supports it.
+
+### AI-Friendly Documentation
+
+The `ARCHITECTURE.md` file is specifically designed for AI assistants (ChatGPT, Claude, Cursor, Copilot). Feed it to your AI tool of choice and it will understand the entire codebase structure, data flows, and how to extend the bot. This enables AI-assisted development and customization.
 
 ---
 

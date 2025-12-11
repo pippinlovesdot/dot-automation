@@ -44,6 +44,8 @@ services/
 tools/
   __init__.py
   registry.py               # Tool registry for function calling
+  web_search.py             # Web search via OpenRouter plugins
+  image_generation.py       # Image generation tool
 assets/                     # Reference images for generation
 .env.example                # Environment template
 requirements.txt            # Python dependencies
@@ -185,10 +187,42 @@ Tool registry for LLM function calling. Contains:
 - `TOOLS` — dict mapping tool names to async functions
 - `TOOLS_SCHEMA` — list of JSON schemas in OpenAI function calling format
 
-Currently empty, ready for extension. To add a tool:
+**Available tools:**
+- `web_search` — real-time web search via OpenRouter plugins
+- `generate_image` — image generation using Gemini 3 Pro
+
+To add a new tool:
 1. Create tool function in `tools/` directory
 2. Import and add to `TOOLS` dict
 3. Add JSON schema to `TOOLS_SCHEMA` list
+
+### tools/web_search.py
+Web search using OpenRouter's native web search plugin.
+
+**How it works:**
+- Uses `plugins: [{id: "web"}]` parameter in OpenRouter API
+- Returns search results with source citations (URLs, titles, snippets)
+- Configurable `max_results` (1-10, default 5)
+
+**Function signature:**
+```python
+async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    # Returns {"content": "...", "sources": [...]}
+```
+
+### tools/image_generation.py
+Image generation using Gemini 3 Pro via OpenRouter.
+
+**How it works:**
+- Loads reference images from `assets/` folder (up to 2 randomly selected)
+- Sends reference images + prompt to model for consistent character appearance
+- Returns raw image bytes (PNG format)
+
+**Function signature:**
+```python
+async def generate_image(prompt: str) -> bytes:
+    # Returns image bytes
+```
 
 ---
 

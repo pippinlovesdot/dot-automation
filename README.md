@@ -176,9 +176,9 @@ Visual content generation supports two providers:
 
 ### Web Search
 
-Real-time web search capability powered by **Perplexity** via OpenRouter:
+Real-time web search capability powered by **OpenRouter's native plugins**:
 
-- **Perplexity Sonar** — Online search model for current information, news, and facts. Automatically invoked by the LLM when it needs fresh data. Integrated through OpenRouter for unified API access.
+- **OpenRouter Web Plugin** — Native web search using `plugins: [{id: "web"}]` API. Returns real search results with source citations (URLs, titles, snippets). Supports multiple search engines including native provider search and Exa.ai.
 
 ### Twitter Integration
 
@@ -224,7 +224,8 @@ my-agent/
 │
 ├── tools/
 │   ├── registry.py          # Available tools for LLM
-│   └── web_search.py        # Web search capability
+│   ├── web_search.py        # Web search via OpenRouter plugins
+│   └── image_generation.py  # Image generation tool
 │
 ├── main.py                  # FastAPI + APScheduler entry point
 ├── requirements.txt         # Dependencies

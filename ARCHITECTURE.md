@@ -32,11 +32,20 @@ main.py                     # Application entry point
 config/
   __init__.py
   settings.py               # Environment configuration
-  personality.py            # Bot personality definition
+  schemas.py                # JSON schemas for LLM responses
+  personality/              # Modular character definition
+    __init__.py             # Combines parts into SYSTEM_PROMPT
+    backstory.py            # Origin story
+    beliefs.py              # Values and priorities
+    instructions.py         # Communication style
+  prompts/                  # LLM prompts
+    agent_autopost.py       # Agent planning prompt
+    mention_selector.py     # Mention handling prompt
 services/
   __init__.py
   autopost.py               # Autoposting service
   mentions.py               # Mention handling service
+  tier_manager.py           # Twitter API tier detection and limits
   llm.py                    # LLM client
   twitter.py                # Twitter API client
   image_gen.py              # Image generation service
@@ -69,6 +78,8 @@ HTTP endpoints:
 - `GET /callback` — OAuth callback for Twitter authentication
 - `POST /trigger-post` — manually trigger autopost
 - `POST /trigger-mentions` — manually trigger mention processing
+- `GET /tier-status` — get current tier and usage stats
+- `POST /tier-refresh` — force tier re-detection
 
 ### config/settings.py
 Pydantic Settings class that loads configuration from environment variables and `.env` file. All settings are typed and validated on startup.
@@ -81,15 +92,47 @@ Key settings:
 - `mentions_interval_minutes` — mention check frequency (default: 20)
 - `enable_image_generation` — toggle for image generation (default: true)
 
-### config/personality.py
-Contains `SYSTEM_PROMPT` constant — the complete personality definition for the bot. This prompt is prepended to all LLM calls and defines:
-- Personality traits and character
-- Communication style (tone, grammar, punctuation)
-- Topics to discuss and avoid
-- Behavioral rules (no hashtags, no engagement bait, etc.)
-- Example tweets that capture the vibe
+### config/personality/
+Modular character definition split into three files:
 
-**To change the bot's personality, edit this file.**
+**`backstory.py`** — `BACKSTORY` constant
+- Origin story and background
+- Who the character is
+
+**`beliefs.py`** — `BELIEFS` constant
+- Personality traits
+- Topics of interest
+- Values and worldview
+
+**`instructions.py`** — `INSTRUCTIONS` constant
+- Communication style (tone, grammar, punctuation)
+- What NOT to do
+- Example tweets
+
+**`__init__.py`** — Combines all parts into `SYSTEM_PROMPT`:
+```python
+SYSTEM_PROMPT = BACKSTORY + BELIEFS + INSTRUCTIONS
+```
+
+**To change the bot's personality, edit the individual files.**
+
+### config/prompts/
+LLM prompts for specific services:
+
+**`agent_autopost.py`** — `AGENT_PROMPT_TEMPLATE`
+- Instructions for autonomous posting agent
+- Contains `{tools_desc}` placeholder for dynamic tool injection
+
+**`mention_selector.py`** — `MENTION_SELECTOR_PROMPT`
+- Instructions for selecting and responding to mentions
+- Criteria for what to reply to and what to ignore
+
+### config/schemas.py
+JSON schemas for structured LLM output:
+
+**`PLAN_SCHEMA`** — Agent plan format `{reasoning, plan: [{tool, params}]}`
+**`POST_TEXT_SCHEMA`** — Final tweet format `{post_text}`
+**`MENTION_SELECTOR_SCHEMA`** — Mention response format `{selected_tweet_id, text, include_picture, reasoning}`
 
 ### services/autopost.py
 `AutoPostService` class — agent-based autoposting with tool execution.
@@ -182,6 +225,45 @@ Flow:
 2. Sends reference images + text prompt to model
 3. Receives base64-encoded image in response
 4. Returns raw image bytes
+
+### services/tier_manager.py
+`TierManager` class — automatic Twitter API tier detection and limit management.
+
+**Initialization:**
+- Called on application startup
+- Queries Twitter Usage API (`GET /2/usage/tweets`)
+- Determines tier from `project_cap` value
+- Schedules hourly refresh to detect subscription upgrades
+
+**Key methods:**
+- `initialize()` — detect tier on startup
+- `detect_tier()` — query Usage API and determine tier
+- `maybe_refresh_tier()` — refresh if interval passed (called hourly by scheduler)
+- `can_post()` — returns `(bool, reason)` - checks if posting allowed
+- `can_use_mentions()` — returns `(bool, reason)` - checks if mentions available on tier
+- `get_status()` — returns full status dict for `/tier-status` endpoint
+
+**Tier detection logic:**
+```python
+if project_cap >= 10_000_000: tier = "enterprise"
+elif project_cap >= 1_000_000: tier = "pro"
+elif project_cap >= 10_000: tier = "basic"
+elif project_cap <= 500: tier = "free"
+```
+
+**Feature matrix:**
+```python
+TIER_FEATURES = {
+    "free": {"mentions": False, "post_limit": 500, "read_limit": 100},
+    "basic": {"mentions": True, "post_limit": 3000, "read_limit": 10000},
+    "pro": {"mentions": True, "post_limit": 300000, "read_limit": 1000000},
+}
+```
+
+**Integration:**
+- `AutoPostService.run()` calls `tier_manager.can_post()` before posting
+- `MentionHandler.process_mentions_batch()` calls `tier_manager.can_use_mentions()` before processing
+- Both services receive `tier_manager` instance via constructor
 
 ### services/database.py
 `Database` class — async PostgreSQL client using asyncpg.

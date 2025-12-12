@@ -14,6 +14,7 @@ from config.settings import settings
 from services.database import Database
 from services.autopost import AutoPostService
 from services.mentions import MentionHandler
+from services.tier_manager import TierManager
 
 # Configure logging
 logging.basicConfig(
@@ -27,12 +28,13 @@ db = Database()
 scheduler = AsyncIOScheduler()
 autopost_service: AutoPostService | None = None
 mention_handler: MentionHandler | None = None
+tier_manager: TierManager | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
-    global autopost_service, mention_handler
+    global autopost_service, mention_handler, tier_manager
 
     # Startup
     logger.info("Starting application...")
@@ -41,9 +43,21 @@ async def lifespan(app: FastAPI):
     await db.connect()
     logger.info("Database connected")
 
-    # Initialize services
-    autopost_service = AutoPostService(db)
-    mention_handler = MentionHandler(db)
+    # Initialize tier manager - detect API tier and limits
+    tier_manager = TierManager()
+    await tier_manager.initialize()
+
+    # Initialize services with tier manager
+    autopost_service = AutoPostService(db, tier_manager)
+    mention_handler = MentionHandler(db, tier_manager)
+
+    # Schedule hourly tier check (auto-detect subscription upgrades)
+    scheduler.add_job(
+        tier_manager.maybe_refresh_tier,
+        "interval",
+        hours=1,
+        id="tier_refresh"
+    )
 
     # Schedule autopost job
     scheduler.add_job(
@@ -92,7 +106,7 @@ async def run_mentions_job():
 app = FastAPI(
     title="Twitter Bot",
     description="Auto-posting Twitter bot with mention handling",
-    version="1.2.0",
+    version="1.2.1",
     lifespan=lifespan
 )
 
@@ -103,7 +117,7 @@ async def health_check():
     return {
         "status": "healthy",
         "scheduler_running": scheduler.running,
-        "version": "1.2.0"
+        "version": "1.2.1"
     }
 
 
@@ -147,6 +161,37 @@ async def trigger_mentions():
         return result
     except Exception as e:
         logger.error(f"Error processing mentions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tier-status")
+async def get_tier_status():
+    """
+    Get current Twitter API tier status and usage.
+
+    Returns tier, usage stats, rate limits, and available features.
+    """
+    if tier_manager is None:
+        raise HTTPException(status_code=503, detail="Tier manager not initialized")
+
+    return tier_manager.get_status()
+
+
+@app.post("/tier-refresh")
+async def refresh_tier():
+    """
+    Force refresh tier detection.
+
+    Use this after upgrading/downgrading Twitter API tier.
+    """
+    if tier_manager is None:
+        raise HTTPException(status_code=503, detail="Tier manager not initialized")
+
+    try:
+        result = await tier_manager.detect_tier()
+        return result
+    except Exception as e:
+        logger.error(f"Error refreshing tier: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

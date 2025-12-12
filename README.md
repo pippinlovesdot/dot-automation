@@ -134,7 +134,9 @@ This separation keeps the codebase simple while enabling both proactive and reac
 
 🐦 **Autonomous Posting** — Schedule-based or trigger-based content generation. Your agent posts in its authentic voice without manual intervention.
 
-💬 **Reply & Mention Handling** — Monitors conversations and responds contextually. LLM decides whether to reply, use tools, or ignore. Requires Twitter API Pro tier for mention access.
+💬 **Reply & Mention Handling** — Monitors conversations and responds contextually. LLM decides whether to reply, use tools, or ignore. Requires Twitter API Basic tier or higher for mention access.
+
+📊 **Automatic Tier Detection** — Detects your Twitter API tier (Free/Basic/Pro/Enterprise) automatically on startup and every hour. Blocks unavailable features and warns when approaching limits.
 
 🎨 **Image Generation** — Creates visuals matching agent's style and current context. Supports multiple providers.
 
@@ -214,7 +216,14 @@ my-agent/
 │
 ├── config/
 │   ├── settings.py          # Environment & configuration
-│   └── personality.py       # Generated character prompt
+│   ├── schemas.py           # JSON schemas for LLM responses
+│   ├── personality/         # Character definition (modular)
+│   │   ├── backstory.py     # Origin story
+│   │   ├── beliefs.py       # Values and priorities
+│   │   └── instructions.py  # Communication style
+│   └── prompts/             # LLM prompts (modular)
+│       ├── agent_autopost.py    # Agent planning prompt
+│       └── mention_selector.py  # Mention handling prompt
 │
 ├── services/
 │   ├── autopost.py          # Scheduled posting logic
@@ -311,19 +320,54 @@ Generates images using Gemini 3 Pro via OpenRouter, with support for reference i
 
 **Example use case:** Place photos of your bot's character/avatar in `assets/`. The model will use these as reference when generating new images, keeping the visual style consistent.
 
-### Personality (`config/personality.py`)
+### Personality (`config/personality/`)
 
-Contains `SYSTEM_PROMPT` that defines your bot's entire character — how it thinks, writes, and behaves.
+Modular character definition split into three files for easier editing:
 
-**What to customize:**
-- Personality traits and worldview
-- Communication style (formal, casual, chaotic, lowercase, etc.)
-- Topics to discuss and topics to avoid
-- Emoji and punctuation preferences
-- Example tweets that capture the vibe
-- Behavioral rules (no hashtags, no engagement bait, etc.)
+**`backstory.py`** — Origin story and background
+- Who the character is
+- Where they come from
+- Core identity
 
-The more detailed your personality prompt, the more consistent and authentic your bot will feel.
+**`beliefs.py`** — Values and priorities
+- Personality traits
+- Topics of interest
+- Worldview
+
+**`instructions.py`** — Communication style
+- How to write (tone, grammar, punctuation)
+- What NOT to do
+- Example tweets
+
+All parts are combined into `SYSTEM_PROMPT` automatically via `__init__.py`.
+
+```python
+from config.personality import SYSTEM_PROMPT  # Gets combined prompt
+from config.personality import BACKSTORY      # Or individual parts
+```
+
+### Tier Manager (`services/tier_manager.py`)
+
+Automatic Twitter API tier detection and limit management.
+
+**How it works:**
+1. On startup, calls Twitter Usage API (`GET /2/usage/tweets`)
+2. Determines tier from `project_cap`: Free (100), Basic (10K), Pro (1M), Enterprise (10M+)
+3. Checks tier every hour to detect subscription upgrades
+4. Blocks unavailable features (e.g., mentions on Free tier)
+5. Auto-pauses operations when monthly cap reached
+6. Logs warnings at 80% and 90% usage
+
+**Tier features:**
+| Tier | Mentions | Post Limit | Read Limit |
+|------|----------|------------|------------|
+| Free | ❌ | 500/month | 100/month |
+| Basic | ✅ | 3,000/month | 10,000/month |
+| Pro | ✅ | 300,000/month | 1,000,000/month |
+
+**Endpoints:**
+- `GET /tier-status` — Current tier, usage stats, available features
+- `POST /tier-refresh` — Force tier re-detection (after subscription change)
 
 ### Database (`services/database.py`)
 

@@ -17,82 +17,14 @@ from services.database import Database
 from services.twitter import TwitterClient
 from tools.registry import TOOLS, get_tools_description
 from config.personality import SYSTEM_PROMPT
+from config.prompts.agent_autopost import AGENT_PROMPT_TEMPLATE
+from config.schemas import PLAN_SCHEMA, POST_TEXT_SCHEMA
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 LLM_MODEL = "anthropic/claude-sonnet-4.5"
-
-# JSON Schema for plan generation
-PLAN_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "agent_plan",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "reasoning": {
-                    "type": "string",
-                    "description": "Your reasoning about what kind of post to create"
-                },
-                "plan": {
-                    "type": "array",
-                    "description": "List of tools to execute in order",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tool": {
-                                "type": "string",
-                                "description": "Tool name from available tools"
-                            },
-                            "params": {
-                                "type": "object",
-                                "description": "Parameters for the tool",
-                                "properties": {
-                                    "query": {
-                                        "type": "string",
-                                        "description": "Search query (for web_search)"
-                                    },
-                                    "prompt": {
-                                        "type": "string",
-                                        "description": "Image prompt (for generate_image)"
-                                    }
-                                },
-                                "additionalProperties": False
-                            }
-                        },
-                        "required": ["tool", "params"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            "required": ["reasoning", "plan"],
-            "additionalProperties": False
-        }
-    }
-}
-
-# JSON Schema for final post text
-POST_TEXT_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "post_text",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "post_text": {
-                    "type": "string",
-                    "description": "The final tweet text (max 280 characters)"
-                }
-            },
-            "required": ["post_text"],
-            "additionalProperties": False
-        }
-    }
-}
 
 
 def get_agent_system_prompt() -> str:
@@ -103,39 +35,16 @@ def get_agent_system_prompt() -> str:
     automatically makes it available to the agent.
     """
     tools_desc = get_tools_description()
-
-    return f"""
-## You are an autonomous Twitter posting agent
-
-Your job is to create engaging Twitter posts. You can use tools to gather information or create media.
-
-{tools_desc}
-
-### Planning Rules:
-- Look at your previous posts to avoid repetition
-- Use tools when they would genuinely improve your post
-- generate_image must ALWAYS be the LAST tool in your plan (if used)
-- Maximum 3 tools per plan
-- You can create a post without any tools if you have a good idea already
-
-### Output Format:
-Return JSON with:
-- reasoning: Why you chose this approach (1-2 sentences)
-- plan: Array of tool calls [{{"tool": "name", "params": {{...}}}}]
-
-Plan can be empty [] if no tools needed.
-
-### Example:
-{{"reasoning": "I want to post about current crypto trends with a visual", "plan": [{{"tool": "web_search", "params": {{"query": "crypto market trends today"}}}}, {{"tool": "generate_image", "params": {{"prompt": "abstract digital art representing market volatility"}}}}]}}
-"""
+    return AGENT_PROMPT_TEMPLATE.format(tools_desc=tools_desc)
 
 
 class AutoPostService:
     """Agent-based autoposting service with continuous conversation."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, tier_manager=None):
         self.db = db
         self.twitter = TwitterClient()
+        self.tier_manager = tier_manager
         self.headers = {
             "Authorization": f"Bearer {settings.openrouter_api_key}",
             "Content-Type": "application/json",
@@ -222,6 +131,18 @@ class AutoPostService:
         logger.info("=" * 60)
 
         try:
+            # Step 0: Check if posting is allowed (tier limits)
+            if self.tier_manager:
+                can_post, reason = self.tier_manager.can_post()
+                if not can_post:
+                    logger.warning(f"[AGENT] Posting blocked: {reason}")
+                    return {
+                        "success": False,
+                        "error": f"posting_blocked: {reason}",
+                        "tier": self.tier_manager.tier,
+                        "usage_percent": self.tier_manager.get_usage_percent()
+                    }
+
             # Step 1: Get context
             logger.info("[AGENT] Step 1: Getting context from database")
             previous_posts = await self.db.get_recent_posts_formatted(limit=50)

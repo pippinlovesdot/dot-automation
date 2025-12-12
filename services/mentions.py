@@ -13,83 +13,23 @@ from services.llm import LLMClient
 from services.twitter import TwitterClient
 from services.image_gen import ImageGenerator
 from config.personality import SYSTEM_PROMPT
+from config.prompts.mention_selector import MENTION_SELECTOR_PROMPT
+from config.schemas import MENTION_SELECTOR_SCHEMA
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
-
-# JSON Schema for mention selection and response (single LLM call)
-MENTION_SELECTOR_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "mention_selector",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "selected_tweet_id": {
-                    "type": "string",
-                    "description": "The tweet_id of the mention you want to reply to. Empty string if none worth replying."
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Your reply text (max 280 chars). Empty if not replying."
-                },
-                "include_picture": {
-                    "type": "boolean",
-                    "description": "Whether to include a generated picture with your reply."
-                },
-                "reasoning": {
-                    "type": "string",
-                    "description": "Brief reason why you chose this mention (or why you're not replying)."
-                }
-            },
-            "required": ["selected_tweet_id", "text", "include_picture", "reasoning"],
-            "additionalProperties": False
-        }
-    }
-}
-
-# System prompt for mention selection
-MENTION_SELECTOR_PROMPT = """
-
-## Selecting and Responding to Mentions
-
-You will receive a list of mentions (people who tagged you on Twitter). Your job:
-
-1. **Choose ONE mention** to reply to - pick the most interesting, engaging, or meaningful one.
-2. **Write your reply** (max 280 characters).
-3. **Decide if a picture would add value** to your response.
-
-### What makes a good mention to reply to:
-- Genuine questions or curiosity about you
-- Interesting conversations or hot takes
-- Community members engaging authentically
-- Opportunities for witty or meaningful responses
-
-### What to IGNORE (set selected_tweet_id to ""):
-- Spam or promotional content
-- Harassment or toxic messages
-- Generic "gm" or low-effort mentions
-- Mentions you've already replied to recently
-- If ALL mentions are low quality, don't reply to any
-
-### Guidelines:
-- Stay in character
-- Keep replies under 280 characters
-- Only include a picture if it genuinely adds value
-- Be authentic, not forced
-"""
 
 
 class MentionHandler:
     """Handler for processing Twitter mentions with LLM selection."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, tier_manager=None):
         """Initialize mention handler."""
         self.db = db
         self.llm = LLMClient()
         self.twitter = TwitterClient()
         self.image_gen = ImageGenerator()
+        self.tier_manager = tier_manager
 
     async def process_mentions_batch(self) -> dict:
         """
@@ -105,6 +45,13 @@ class MentionHandler:
         Returns:
             Summary of what happened.
         """
+        # Check if mentions are available on current tier
+        if self.tier_manager:
+            can_use, reason = self.tier_manager.can_use_mentions()
+            if not can_use:
+                logger.warning(f"[MENTIONS] Mentions blocked: {reason}")
+                return {"error": reason, "replied": False}
+
         logger.info("Processing mentions batch...")
 
         # Step 1: Fetch mentions from Twitter
@@ -150,7 +97,7 @@ Choose ONE mention to reply to (or none if all are low quality). Provide the twe
         result = await self.llm.generate_structured(
             system_prompt,
             user_prompt,
-            MENTION_SELECTOR_FORMAT
+            MENTION_SELECTOR_SCHEMA
         )
 
         logger.info(f"LLM decision: {result}")

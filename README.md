@@ -115,12 +115,14 @@ Each layer feeds into the next. Your agent behaves consistently across thousands
 
 The system operates on **two triggers**:
 
-| Scheduled Posts | Mention Responses |
-|-----------------|-------------------|
+| Scheduled Posts (Agent) | Mention Responses |
+|-------------------------|-------------------|
 | Cron-based (configurable interval) | Polling-based (configurable interval) |
-| Generates original content | Handles mentions & replies |
-| Creates matching images | LLM chooses which mention to reply to |
-| Posts to Twitter | LLM generates response + optional image |
+| Agent creates plan → executes tools → generates post | Handles mentions & replies |
+| Dynamic tool usage (web search, image generation) | LLM chooses which mention to reply to |
+| Posts to Twitter with optional media | LLM generates response + optional image |
+
+**Agent Architecture:** The autoposting system uses an autonomous agent that decides which tools to use based on context. It can search the web for current information, generate images, or post without any tools — whatever makes the best tweet.
 
 This separation keeps the codebase simple while enabling both proactive and reactive behavior.
 
@@ -245,15 +247,33 @@ The `ARCHITECTURE.md` file is specifically designed for AI assistants (ChatGPT, 
 
 ### Auto-posting (`services/autopost.py`)
 
-The bot automatically generates and posts tweets at configurable intervals using APScheduler.
+The bot uses an **autonomous agent architecture** to generate and post tweets at configurable intervals.
 
-**How it works:**
-1. Fetches recent posts from database to provide context (avoids repetition)
-2. Sends personality prompt + context to LLM with structured output format
-3. LLM returns `{text: "...", include_picture: true/false}`
-4. If `include_picture` is true and image generation is enabled, generates an image
-5. Posts tweet to Twitter (with optional media)
-6. Saves post to database for future context
+**How the agent works:**
+1. Agent receives context (previous 50 posts to avoid repetition)
+2. Agent creates a **plan** — decides which tools to use:
+   - `web_search` — to find current information, news, prices
+   - `generate_image` — to create a visual for the post
+   - Or no tools at all if it has a good idea already
+3. Agent executes tools step by step, with results feeding back into the conversation
+4. Agent generates final tweet text based on all gathered information
+5. Tweet is posted with optional image
+6. Saved to database for future context
+
+**Example agent flow:**
+```
+Agent thinks: "I want to post about crypto trends with a visual"
+→ Plan: [web_search("crypto market today"), generate_image("abstract chart art")]
+→ Executes web_search, gets current market info
+→ Executes generate_image, creates matching visual
+→ Generates tweet: "the market is just vibes at this point..."
+→ Posts with image
+```
+
+**Key features:**
+- **Dynamic tool selection** — Agent decides when tools are needed
+- **Continuous conversation** — Tool results inform the final tweet
+- **Modular tools** — Add new tools to `tools/registry.py` and agent automatically uses them
 
 **Configuration:**
 - `POST_INTERVAL_MINUTES` — Time between auto-posts (default: 30)

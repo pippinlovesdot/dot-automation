@@ -92,22 +92,38 @@ Contains `SYSTEM_PROMPT` constant — the complete personality definition for th
 **To change the bot's personality, edit this file.**
 
 ### services/autopost.py
-`AutoPostService` class handles scheduled tweet generation.
+`AutoPostService` class — agent-based autoposting with tool execution.
 
-Flow:
+**Agent Architecture:**
+The agent operates in a continuous conversation, creating a plan and executing tools step by step.
+
+**Flow:**
 1. Fetches last 50 posts from database for context
-2. Calls LLM with structured output format requesting `{text, include_picture}`
-3. If `include_picture=true` and image generation enabled, generates image
-4. Posts tweet to Twitter (with optional media)
-5. Saves post to database
+2. Builds system prompt: personality + agent instructions + dynamic tools list
+3. **LLM Call #1:** Agent creates a plan `{reasoning, plan: [{tool, params}]}`
+4. Validates plan (max 3 tools, generate_image must be last)
+5. Executes each tool, adding results back to conversation as user messages
+6. **LLM Call #2:** Agent generates final tweet text based on all context
+7. Uploads image if generated
+8. Posts tweet to Twitter
+9. Saves to database
 
-Structured output schema:
+**Plan Schema:**
 ```json
 {
-  "text": "string (max 280 chars)",
-  "include_picture": "boolean"
+  "reasoning": "Why this approach (1-2 sentences)",
+  "plan": [
+    {"tool": "web_search", "params": {"query": "..."}},
+    {"tool": "generate_image", "params": {"prompt": "..."}}
+  ]
 }
 ```
+
+**Key design decisions:**
+- Agent can choose to use no tools (empty plan `[]`) if it has a good idea already
+- Tool results become part of the conversation, informing the final tweet
+- `generate_image` must always be the last tool (image is based on gathered info)
+- Dynamic tool discovery via `get_tools_description()` from registry
 
 ### services/mentions.py
 `MentionHandler` class processes Twitter mentions.
@@ -183,18 +199,23 @@ Key methods:
 - `get_state(key)` / `set_state(key, value)` — state management
 
 ### tools/registry.py
-Tool registry for LLM function calling. Contains:
+Tool registry for agent function calling. Contains:
 - `TOOLS` — dict mapping tool names to async functions
 - `TOOLS_SCHEMA` — list of JSON schemas in OpenAI function calling format
+- `get_tools_description()` — generates human-readable tool descriptions for agent prompts
 
 **Available tools:**
 - `web_search` — real-time web search via OpenRouter plugins
 - `generate_image` — image generation using Gemini 3 Pro
 
+**Dynamic tool discovery:**
+The `get_tools_description()` function automatically generates tool documentation from `TOOLS_SCHEMA`. When you add a new tool, it appears in the agent's system prompt automatically.
+
 To add a new tool:
 1. Create tool function in `tools/` directory
 2. Import and add to `TOOLS` dict
 3. Add JSON schema to `TOOLS_SCHEMA` list
+4. The agent will automatically see and be able to use it
 
 ### tools/web_search.py
 Web search using OpenRouter's native web search plugin.
@@ -258,15 +279,21 @@ CREATE TABLE bot_state (
 
 ## Data Flow Diagrams
 
-### Autoposting
+### Autoposting (Agent Architecture)
 ```
 [Scheduler]
     → AutoPostService.run()
     → Database.get_recent_posts_formatted(50)
-    → LLMClient.generate_structured()
-        → returns {text, include_picture}
-    → [if include_picture] ImageGenerator.generate()
-    → [if include_picture] TwitterClient.upload_media()
+    → Build system prompt (personality + agent instructions + tools)
+    → LLM Call #1: Get plan
+        → returns {reasoning, plan: [{tool, params}]}
+    → Validate plan
+    → For each tool in plan:
+        → Execute tool (web_search or generate_image)
+        → Add result to conversation
+    → LLM Call #2: Get final tweet text
+        → returns {post_text}
+    → [if image_bytes] TwitterClient.upload_media()
     → TwitterClient.post()
     → Database.save_post()
 ```

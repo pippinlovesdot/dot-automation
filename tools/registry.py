@@ -55,3 +55,30 @@ TOOLS_SCHEMA = [
         }
     }
 ]
+
+
+def get_tools_description() -> str:
+    """
+    Generate human-readable tools description from TOOLS_SCHEMA.
+
+    Used in agent prompts so LLM knows what tools are available.
+    When you add a new tool to TOOLS_SCHEMA, it automatically appears in agent prompts.
+    """
+    lines = ["### Available Tools:"]
+
+    for i, tool_def in enumerate(TOOLS_SCHEMA, 1):
+        func = tool_def["function"]
+        name = func["name"]
+        desc = func["description"]
+        params = func["parameters"]["properties"]
+        required = func["parameters"].get("required", [])
+
+        lines.append(f"\n**{i}. {name}**")
+        lines.append(f"   {desc}")
+        lines.append(f"   Parameters:")
+
+        for param_name, param_info in params.items():
+            req = "(required)" if param_name in required else "(optional)"
+            lines.append(f"   - {param_name}: {param_info['description']} {req}")
+
+    return "\n".join(lines)

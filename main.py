@@ -92,7 +92,7 @@ async def run_mentions_job():
 app = FastAPI(
     title="Twitter Bot",
     description="Auto-posting Twitter bot with mention handling",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan
 )
 
@@ -103,7 +103,7 @@ async def health_check():
     return {
         "status": "healthy",
         "scheduler_running": scheduler.running,
-        "version": "1.1.0"
+        "version": "1.2.0"
     }
 
 

@@ -1,13 +1,14 @@
 """
-Twitter Bot with Auto-posting and Mention Handling.
+DOT Twitter Bot - Auto-posting and Mention Handling.
 
-FastAPI application with APScheduler for scheduled posts and mention responses.
+FastAPI application with APScheduler for scheduled posts.
+Version 1.2.2 - Infrastructure improvements.
 """
 
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config.settings import settings
@@ -50,6 +51,18 @@ async def lifespan(app: FastAPI):
     # Initialize services with tier manager
     autopost_service = AutoPostService(db, tier_manager)
     mention_handler = MentionHandler(db, tier_manager)
+    logger.info("Services initialized")
+
+    # Check connected Twitter account
+    try:
+        twitter_client = autopost_service.twitter
+        me = twitter_client.get_me()
+        logger.info("=" * 50)
+        logger.info(f"TWITTER ACCOUNT: @{me['username']}")
+        logger.info(f"TWITTER ID: {me['id']}")
+        logger.info("=" * 50)
+    except Exception as e:
+        logger.error(f"Failed to get Twitter account info: {e}")
 
     # Schedule hourly tier check (auto-detect subscription upgrades)
     scheduler.add_job(
@@ -58,27 +71,8 @@ async def lifespan(app: FastAPI):
         hours=1,
         id="tier_refresh"
     )
-
-    # Schedule autopost job
-    scheduler.add_job(
-        autopost_service.run,
-        "interval",
-        minutes=settings.post_interval_minutes,
-        id="autopost_job",
-        replace_existing=True
-    )
-
-    # Schedule mentions job (every 20 minutes)
-    scheduler.add_job(
-        run_mentions_job,
-        "interval",
-        minutes=settings.mentions_interval_minutes,
-        id="mentions_job",
-        replace_existing=True
-    )
-
     scheduler.start()
-    logger.info(f"Scheduler started: autopost every {settings.post_interval_minutes} min, mentions every {settings.mentions_interval_minutes} min")
+    logger.info("Scheduler started: hourly tier refresh enabled")
 
     yield
 
@@ -89,45 +83,43 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown complete")
 
 
-async def run_mentions_job():
-    """Scheduled job to process mentions."""
-    if mention_handler is None:
-        logger.warning("Mention handler not initialized")
-        return
-
-    try:
-        logger.info("Running scheduled mentions check...")
-        result = await mention_handler.process_mentions_batch()
-        logger.info(f"Mentions job result: {result}")
-    except Exception as e:
-        logger.error(f"Error in mentions job: {e}")
-
-
 app = FastAPI(
-    title="Twitter Bot",
-    description="Auto-posting Twitter bot with mention handling",
-    version="1.2.1",
+    title="DOT Twitter Bot",
+    description="Agent-based auto-posting Twitter bot with mention handling",
+    version="1.2.2",
     lifespan=lifespan
 )
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with detailed status."""
+    db_ok = await db.ping()
     return {
-        "status": "healthy",
+        "status": "healthy" if db_ok else "degraded",
+        "database": "connected" if db_ok else "disconnected",
         "scheduler_running": scheduler.running,
-        "version": "1.2.1"
+        "tier": tier_manager.tier if tier_manager else "unknown",
+        "version": "1.2.2"
+    }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Get bot metrics and statistics."""
+    return {
+        "posts_total": await db.count_posts(),
+        "posts_today": await db.count_posts_today(),
+        "mentions_total": await db.count_mentions(),
+        "mentions_today": await db.count_mentions_today(),
+        "last_post_at": await db.get_last_post_time(),
+        "last_mention_at": await db.get_last_mention_time()
     }
 
 
 @app.get("/callback")
 async def oauth_callback(oauth_token: str = None, oauth_verifier: str = None):
-    """
-    OAuth callback endpoint for Twitter authentication.
-
-    Required for Twitter API Read+Write access.
-    """
+    """OAuth callback endpoint for Twitter authentication."""
     return {
         "status": "ok",
         "message": "OAuth callback received",
@@ -136,28 +128,100 @@ async def oauth_callback(oauth_token: str = None, oauth_verifier: str = None):
     }
 
 
-@app.post("/trigger-post")
-async def trigger_post():
-    """Manually trigger an autopost."""
-    if autopost_service is None:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-
-    try:
-        await autopost_service.run()
-        return {"status": "posted"}
-    except Exception as e:
-        logger.error(f"Error triggering post: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/trigger-mentions")
-async def trigger_mentions():
-    """Manually trigger mentions processing."""
+@app.post("/webhook/mentions")
+async def handle_mentions_webhook(request: Request):
+    """Handle incoming Twitter webhook for mentions."""
     if mention_handler is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
     try:
-        result = await mention_handler.process_mentions_batch()
+        data = await request.json()
+        logger.info(f"Received mention webhook: {data}")
+
+        if "tweet_create_events" in data:
+            for tweet in data["tweet_create_events"]:
+                await mention_handler.handle(tweet)
+
+        return {"status": "processed"}
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/webhook/mentions")
+async def verify_webhook(crc_token: str = None):
+    """Handle Twitter CRC challenge for webhook verification."""
+    import hmac
+    import hashlib
+    import base64
+
+    if not crc_token:
+        raise HTTPException(status_code=400, detail="Missing crc_token")
+
+    sha256_hash = hmac.new(
+        settings.twitter_api_secret.encode(),
+        msg=crc_token.encode(),
+        digestmod=hashlib.sha256
+    ).digest()
+
+    response_token = base64.b64encode(sha256_hash).decode()
+
+    return {"response_token": f"sha256={response_token}"}
+
+
+@app.post("/trigger-post")
+async def trigger_post():
+    """
+    Trigger agent-based autopost.
+
+    The agent will:
+    1. Create a plan (which tools to use)
+    2. Execute tools step by step
+    3. Generate final post text
+    4. Post to Twitter
+    """
+    if autopost_service is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        logger.info("=" * 60)
+        logger.info("ENDPOINT: /trigger-post called")
+        logger.info("=" * 60)
+
+        result = await autopost_service.run()
+
+        logger.info(f"ENDPOINT: Agent result: success={result.get('success')}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"ENDPOINT: Error in post: {e}")
+        logger.exception(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/check-mentions")
+async def check_mentions():
+    """Fetch mentions WITHOUT processing (dry run)."""
+    if mention_handler is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        result = await mention_handler.check_mentions(dry_run=True)
+        return result
+    except Exception as e:
+        logger.error(f"Error checking mentions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/process-mentions")
+async def process_mentions():
+    """Fetch AND process mentions (actually reply)."""
+    if mention_handler is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        result = await mention_handler.check_mentions(dry_run=False)
         return result
     except Exception as e:
         logger.error(f"Error processing mentions: {e}")
@@ -166,11 +230,7 @@ async def trigger_mentions():
 
 @app.get("/tier-status")
 async def get_tier_status():
-    """
-    Get current Twitter API tier status and usage.
-
-    Returns tier, usage stats, rate limits, and available features.
-    """
+    """Get current Twitter API tier status and usage."""
     if tier_manager is None:
         raise HTTPException(status_code=503, detail="Tier manager not initialized")
 
@@ -179,11 +239,7 @@ async def get_tier_status():
 
 @app.post("/tier-refresh")
 async def refresh_tier():
-    """
-    Force refresh tier detection.
-
-    Use this after upgrading/downgrading Twitter API tier.
-    """
+    """Force refresh tier detection."""
     if tier_manager is None:
         raise HTTPException(status_code=503, detail="Tier manager not initialized")
 

@@ -216,6 +216,7 @@ my-agent/
 │
 ├── config/
 │   ├── settings.py          # Environment & configuration
+│   ├── models.py            # Model configuration (LLM, Image models)
 │   ├── schemas.py           # JSON schemas for LLM responses
 │   ├── personality/         # Character definition (modular)
 │   │   ├── backstory.py     # Origin story
@@ -225,13 +226,16 @@ my-agent/
 │       ├── agent_autopost.py    # Agent planning prompt
 │       └── mention_selector.py  # Mention handling prompt
 │
+├── utils/
+│   └── api.py               # OpenRouter API configuration
+│
 ├── services/
-│   ├── autopost.py          # Scheduled posting logic
-│   ├── mentions.py          # Mention/reply handler with tool calling
-│   ├── llm.py               # OpenRouter client
+│   ├── autopost.py          # Agent-based scheduled posting
+│   ├── mentions.py          # Mention/reply handler
+│   ├── tier_manager.py      # Twitter API tier detection
+│   ├── llm.py               # OpenRouter client (generate, chat)
 │   ├── twitter.py           # Twitter API v2 integration
-│   ├── image_gen.py         # Image generation
-│   └── database.py          # PostgreSQL for history
+│   └── database.py          # PostgreSQL for history + metrics
 │
 ├── tools/
 │   ├── registry.py          # Available tools for LLM

@@ -11,20 +11,15 @@ import json
 import logging
 from typing import Any
 
-import httpx
-
 from services.database import Database
+from services.llm import LLMClient
 from services.twitter import TwitterClient
 from tools.registry import TOOLS, get_tools_description
 from config.personality import SYSTEM_PROMPT
 from config.prompts.agent_autopost import AGENT_PROMPT_TEMPLATE
 from config.schemas import PLAN_SCHEMA, POST_TEXT_SCHEMA
-from config.settings import settings
 
 logger = logging.getLogger(__name__)
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-LLM_MODEL = "anthropic/claude-sonnet-4.5"
 
 
 def get_agent_system_prompt() -> str:
@@ -43,45 +38,9 @@ class AutoPostService:
 
     def __init__(self, db: Database, tier_manager=None):
         self.db = db
+        self.llm = LLMClient()
         self.twitter = TwitterClient()
         self.tier_manager = tier_manager
-        self.headers = {
-            "Authorization": f"Bearer {settings.openrouter_api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://pippinlovesdot.com",
-            "X-Title": "DOT Twitter Bot"
-        }
-
-    async def _llm_call(self, messages: list[dict], response_format: dict) -> dict:
-        """
-        Make LLM call with messages and structured output.
-
-        Args:
-            messages: Conversation history
-            response_format: JSON schema for response
-
-        Returns:
-            Parsed JSON response
-        """
-        payload = {
-            "model": LLM_MODEL,
-            "messages": messages,
-            "response_format": response_format
-        }
-
-        logger.info(f"[AGENT] LLM call with {len(messages)} messages")
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                OPENROUTER_URL,
-                headers=self.headers,
-                json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            content = data["choices"][0]["message"]["content"]
-            return json.loads(content)
 
     def _validate_plan(self, plan: list[dict]) -> None:
         """
@@ -162,7 +121,7 @@ Now create your plan. What tools do you need (if any)?"""}
 
             # Step 3: Get plan from LLM
             logger.info("[AGENT] Step 2: Getting plan from LLM")
-            plan_result = await self._llm_call(messages, PLAN_SCHEMA)
+            plan_result = await self.llm.chat(messages, PLAN_SCHEMA)
 
             logger.info(f"[AGENT] Plan received:")
             logger.info(f"[AGENT]   Reasoning: {plan_result['reasoning']}")
@@ -216,7 +175,7 @@ Sources found: {len(result['sources'])}"""
 
             messages.append({"role": "user", "content": "Now write your final tweet text (max 280 characters). Just the tweet, nothing else."})
 
-            post_result = await self._llm_call(messages, POST_TEXT_SCHEMA)
+            post_result = await self.llm.chat(messages, POST_TEXT_SCHEMA)
             post_text = post_result["post_text"].strip()
 
             # Ensure within limit

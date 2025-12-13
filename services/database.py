@@ -69,6 +69,15 @@ class Database:
                 )
             """)
 
+            # Bot state table (for storing last_mention_id, etc.)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    key VARCHAR(50) PRIMARY KEY,
+                    value TEXT,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
         logger.info("Database connected and tables created")
 
     async def close(self) -> None:
@@ -171,7 +180,7 @@ class Database:
             author_handle: Twitter handle of the author.
             author_text: Text of the mention.
             our_reply: Our reply text (None if ignored).
-            action: Action taken ('replied', 'ignored').
+            action: Action taken ('replied', 'ignored', 'tool_used').
 
         Returns:
             Database ID of the saved mention.
@@ -195,7 +204,43 @@ class Database:
             logger.info(f"Saved mention {row['id']} with action '{action}'")
             return row["id"]
 
-    async def get_recent_mentions_formatted(self, limit: int = 10) -> str:
+    async def get_user_mention_history(self, author_handle: str, limit: int = 5) -> str:
+        """
+        Get recent mention history with a specific user.
+
+        Args:
+            author_handle: Twitter handle of the user.
+            limit: Maximum number of interactions to retrieve.
+
+        Returns:
+            Formatted string with conversation history.
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected")
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT author_text, our_reply, created_at
+                FROM mentions
+                WHERE author_handle = $1 AND our_reply IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                author_handle, limit
+            )
+
+            if not rows:
+                return "No previous conversations with this user."
+
+            history = []
+            for row in reversed(rows):  # Oldest first
+                history.append(f"@{author_handle}: {row['author_text']}")
+                history.append(f"You replied: {row['our_reply']}")
+
+            return "\n".join(history)
+
+    async def get_recent_mentions_formatted(self, limit: int = 15) -> str:
         """
         Get recent mentions formatted for LLM context.
 
@@ -211,7 +256,7 @@ class Database:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT author_handle, author_text, our_reply
+                SELECT author_handle, author_text, our_reply, action
                 FROM mentions
                 WHERE our_reply IS NOT NULL
                 ORDER BY created_at DESC
@@ -229,6 +274,48 @@ class Database:
                 history.append(f"   Your reply: {row['our_reply']}")
 
             return "\n".join(history)
+
+    async def get_state(self, key: str) -> str | None:
+        """
+        Get a value from bot_state table.
+
+        Args:
+            key: State key.
+
+        Returns:
+            Value or None if not found.
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM bot_state WHERE key = $1",
+                key
+            )
+            return row["value"] if row else None
+
+    async def set_state(self, key: str, value: str) -> None:
+        """
+        Set a value in bot_state table.
+
+        Args:
+            key: State key.
+            value: Value to store.
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected")
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO bot_state (key, value, updated_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+                """,
+                key, value
+            )
+            logger.info(f"Set state {key} = {value}")
 
     async def mention_exists(self, tweet_id: str) -> bool:
         """
@@ -249,3 +336,85 @@ class Database:
                 tweet_id
             )
             return row is not None
+
+    # ==================== Metrics Methods ====================
+
+    async def ping(self) -> bool:
+        """
+        Check database connection health.
+
+        Returns:
+            True if database is reachable.
+        """
+        if not self.pool:
+            return False
+
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            return True
+        except Exception as e:
+            logger.error(f"Database ping failed: {e}")
+            return False
+
+    async def count_posts(self) -> int:
+        """Get total number of posts."""
+        if not self.pool:
+            return 0
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT COUNT(*) FROM posts")
+
+    async def count_posts_today(self) -> int:
+        """Get number of posts created today."""
+        if not self.pool:
+            return 0
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT COUNT(*) FROM posts WHERE created_at >= CURRENT_DATE"
+            )
+
+    async def count_mentions(self) -> int:
+        """Get total number of processed mentions."""
+        if not self.pool:
+            return 0
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT COUNT(*) FROM mentions")
+
+    async def count_mentions_today(self) -> int:
+        """Get number of mentions processed today."""
+        if not self.pool:
+            return 0
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT COUNT(*) FROM mentions WHERE created_at >= CURRENT_DATE"
+            )
+
+    async def get_last_post_time(self) -> str | None:
+        """Get timestamp of the last post."""
+        if not self.pool:
+            return None
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT created_at FROM posts ORDER BY created_at DESC LIMIT 1"
+            )
+            if row:
+                return row["created_at"].isoformat()
+            return None
+
+    async def get_last_mention_time(self) -> str | None:
+        """Get timestamp of the last processed mention."""
+        if not self.pool:
+            return None
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT created_at FROM mentions ORDER BY created_at DESC LIMIT 1"
+            )
+            if row:
+                return row["created_at"].isoformat()
+            return None

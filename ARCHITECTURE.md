@@ -32,6 +32,7 @@ main.py                     # Application entry point
 config/
   __init__.py
   settings.py               # Environment configuration
+  models.py                 # Model configuration (LLM_MODEL, IMAGE_MODEL)
   schemas.py                # JSON schemas for LLM responses
   personality/              # Modular character definition
     __init__.py             # Combines parts into SYSTEM_PROMPT
@@ -41,15 +42,17 @@ config/
   prompts/                  # LLM prompts
     agent_autopost.py       # Agent planning prompt
     mention_selector.py     # Mention handling prompt
+utils/
+  __init__.py
+  api.py                    # OpenRouter API configuration
 services/
   __init__.py
-  autopost.py               # Autoposting service
+  autopost.py               # Autoposting service (uses LLMClient)
   mentions.py               # Mention handling service
   tier_manager.py           # Twitter API tier detection and limits
-  llm.py                    # LLM client
+  llm.py                    # LLM client (generate, generate_structured, chat)
   twitter.py                # Twitter API client
-  image_gen.py              # Image generation service
-  database.py               # Database operations
+  database.py               # Database operations + metrics
 tools/
   __init__.py
   registry.py               # Tool registry for function calling
@@ -67,19 +70,41 @@ requirements.txt            # Python dependencies
 ### main.py
 FastAPI application with lifespan management. On startup:
 1. Connects to PostgreSQL database
-2. Initializes AutoPostService and MentionHandler
-3. Schedules two recurring jobs via APScheduler:
-   - `autopost_job` — runs every POST_INTERVAL_MINUTES
-   - `mentions_job` — runs every MENTIONS_INTERVAL_MINUTES
-4. Starts the scheduler
+2. Initializes TierManager, AutoPostService, and MentionHandler
+3. Logs connected Twitter account info
+4. Schedules hourly tier refresh via APScheduler
+5. Starts the scheduler
 
 HTTP endpoints:
-- `GET /health` — health check with scheduler status
+- `GET /health` — health check with database, scheduler, tier status
+- `GET /metrics` — bot statistics (posts/mentions counts, timestamps)
 - `GET /callback` — OAuth callback for Twitter authentication
-- `POST /trigger-post` — manually trigger autopost
-- `POST /trigger-mentions` — manually trigger mention processing
+- `POST /trigger-post` — manually trigger agent-based autopost
+- `GET /check-mentions` — fetch mentions without processing (dry run)
+- `POST /process-mentions` — fetch and process mentions
 - `GET /tier-status` — get current tier and usage stats
 - `POST /tier-refresh` — force tier re-detection
+- `POST /webhook/mentions` — Twitter webhook endpoint
+- `GET /webhook/mentions` — Twitter CRC challenge verification
+
+### utils/api.py
+Centralized OpenRouter API configuration.
+
+**Contents:**
+- `OPENROUTER_URL` — API endpoint constant
+- `get_openrouter_headers()` — Returns headers with authorization, content-type, referer
+
+**Used by:** services/llm.py, tools/web_search.py, tools/image_generation.py
+
+### config/models.py
+Centralized model configuration.
+
+```python
+LLM_MODEL = "anthropic/claude-sonnet-4.5"
+IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+```
+
+**Used by:** services/llm.py, tools/web_search.py, tools/image_generation.py
 
 ### config/settings.py
 Pydantic Settings class that loads configuration from environment variables and `.env` file. All settings are typed and validated on startup.
@@ -199,9 +224,9 @@ Structured output schema:
 Methods:
 - `generate(system, user)` — simple text completion
 - `generate_structured(system, user, response_format)` — JSON structured output
-- `chat(messages, tools)` — chat completion with optional tool calling
+- `chat(messages, response_format)` — multi-turn chat with optional structured output
 
-Uses `anthropic/claude-sonnet-4.5` model by default (configurable via TEXT_MODEL constant).
+Uses model from `config/models.py` (`LLM_MODEL`). The `chat()` method is used by `AutoPostService` for agent conversations.
 
 ### services/twitter.py
 `TwitterClient` class — Twitter API integration using tweepy.
@@ -215,16 +240,27 @@ Methods:
 
 Note: Media upload uses API v1.1 because v2 doesn't support it yet.
 
-### services/image_gen.py
-`ImageGenerator` class — image generation via OpenRouter.
+### services/database.py
+`Database` class — async PostgreSQL client using asyncpg.
 
-Uses `google/gemini-3-pro-image-preview` model. Supports reference images from `assets/` folder for consistent character appearance.
+Tables (auto-created on startup):
+- `posts` — stores all posted tweets
+- `mentions` — stores mention interactions
+- `bot_state` — key-value store for state (e.g., last_mention_id)
 
-Flow:
-1. Loads reference images from `assets/` folder (up to 2 randomly selected)
-2. Sends reference images + text prompt to model
-3. Receives base64-encoded image in response
-4. Returns raw image bytes
+**Key methods:**
+- `get_recent_posts_formatted(limit)` — posts as formatted string for LLM context
+- `save_post(text, tweet_id, include_picture)` — save new post
+- `save_mention(...)` — save mention interaction
+- `mention_exists(tweet_id)` — check if mention already processed
+- `get_state(key)` / `set_state(key, value)` — state management
+- `get_user_mention_history(author_handle)` — conversation history with user
+
+**Metrics methods (v1.2.2):**
+- `ping()` — health check (returns bool)
+- `count_posts()` / `count_posts_today()` — post counts
+- `count_mentions()` / `count_mentions_today()` — mention counts
+- `get_last_post_time()` / `get_last_mention_time()` — timestamps
 
 ### services/tier_manager.py
 `TierManager` class — automatic Twitter API tier detection and limit management.
@@ -264,21 +300,6 @@ TIER_FEATURES = {
 - `AutoPostService.run()` calls `tier_manager.can_post()` before posting
 - `MentionHandler.process_mentions_batch()` calls `tier_manager.can_use_mentions()` before processing
 - Both services receive `tier_manager` instance via constructor
-
-### services/database.py
-`Database` class — async PostgreSQL client using asyncpg.
-
-Tables (auto-created on startup):
-- `posts` — stores all posted tweets
-- `mentions` — stores mention interactions
-- `bot_state` — key-value store for state (e.g., last_mention_id)
-
-Key methods:
-- `get_recent_posts_formatted(limit)` — posts as formatted string for LLM context
-- `save_post(text, tweet_id, include_picture)` — save new post
-- `save_mention(...)` — save mention interaction
-- `mention_exists(tweet_id)` — check if mention already processed
-- `get_state(key)` / `set_state(key, value)` — state management
 
 ### tools/registry.py
 Tool registry for agent function calling. Contains:

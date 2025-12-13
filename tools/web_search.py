@@ -10,12 +10,10 @@ from typing import Any
 
 import httpx
 
-from config.settings import settings
+from config.models import LLM_MODEL
+from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-SEARCH_MODEL = "anthropic/claude-sonnet-4.5"
 
 
 async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
@@ -29,17 +27,10 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
     Returns:
         Dict with 'content' (search summary) and 'sources' (list of citations).
     """
-    logger.info(f"Web search: {query}")
-
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://pippinlovesdot.com",
-        "X-Title": "DOT Twitter Bot"
-    }
+    logger.info(f"[WEB_SEARCH] Starting search: {query}")
 
     payload = {
-        "model": SEARCH_MODEL,
+        "model": LLM_MODEL,
         "messages": [
             {"role": "user", "content": query}
         ],
@@ -51,14 +42,18 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
         ]
     }
 
+    logger.info(f"[WEB_SEARCH] Sending request to OpenRouter with plugins: web")
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             OPENROUTER_URL,
-            headers=headers,
+            headers=get_openrouter_headers(),
             json=payload
         )
         response.raise_for_status()
         data = response.json()
+
+        logger.info(f"[WEB_SEARCH] Response received")
 
         message = data["choices"][0]["message"]
         content = message.get("content", "")
@@ -74,7 +69,8 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
                     "snippet": citation.get("content", "")
                 })
 
-        logger.info(f"Web search completed: {len(sources)} sources found")
+        logger.info(f"[WEB_SEARCH] Completed: {len(sources)} sources found")
+        logger.info(f"[WEB_SEARCH] Content preview: {content[:200]}...")
 
         return {
             "content": content,

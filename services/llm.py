@@ -1,8 +1,8 @@
 """
 LLM client for OpenRouter API.
 
-Provides async interface for text generation with structured output support.
-Uses anthropic/claude-sonnet-4.5 for text generation.
+Provides async interface for text generation with tool calling support.
+Unified client for all LLM interactions in the bot.
 """
 
 import json
@@ -11,18 +11,16 @@ from typing import Any
 
 import httpx
 
-from config.settings import settings
+from config.models import LLM_MODEL
+from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-TEXT_MODEL = "anthropic/claude-sonnet-4.5"
 
 
 class LLMClient:
     """Async client for OpenRouter LLM API."""
 
-    def __init__(self, model: str = TEXT_MODEL):
+    def __init__(self, model: str = LLM_MODEL):
         """
         Initialize LLM client.
 
@@ -30,12 +28,6 @@ class LLMClient:
             model: Model identifier for OpenRouter.
         """
         self.model = model
-        self.headers = {
-            "Authorization": f"Bearer {settings.openrouter_api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://pippinlovesdot.com",
-            "X-Title": "DOT Twitter Bot"
-        }
 
     async def generate(self, system: str, user: str) -> str:
         """
@@ -56,7 +48,7 @@ class LLMClient:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 OPENROUTER_URL,
-                headers=self.headers,
+                headers=get_openrouter_headers(),
                 json={
                     "model": self.model,
                     "messages": messages,
@@ -95,7 +87,7 @@ class LLMClient:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 OPENROUTER_URL,
-                headers=self.headers,
+                headers=get_openrouter_headers(),
                 json={
                     "model": self.model,
                     "messages": messages,
@@ -109,5 +101,46 @@ class LLMClient:
             content = data["choices"][0]["message"]["content"]
             logger.info(f"Generated structured response: {content}")
 
-            # Parse JSON response
             return json.loads(content)
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """
+        Multi-turn chat completion with optional structured output.
+
+        Used for agent flows where conversation history matters.
+
+        Args:
+            messages: List of message dicts with role and content.
+            response_format: Optional JSON schema for structured output.
+
+        Returns:
+            Parsed JSON response if response_format provided, else raw content dict.
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 1024
+        }
+
+        if response_format:
+            payload["response_format"] = response_format
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                OPENROUTER_URL,
+                headers=get_openrouter_headers(),
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            content = data["choices"][0]["message"]["content"]
+            logger.info(f"Chat response: {content[:200]}...")
+
+            if response_format:
+                return json.loads(content)
+            return {"content": content}

@@ -12,12 +12,10 @@ from pathlib import Path
 
 import httpx
 
-from config.settings import settings
+from config.models import IMAGE_MODEL
+from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-IMAGE_MODEL = "google/gemini-3-pro-image-preview"
 
 # Path to reference images folder
 ASSETS_PATH = Path(__file__).parent.parent / "assets"
@@ -34,7 +32,7 @@ def _get_reference_images() -> list[str]:
         List of base64-encoded images with data URI prefix.
     """
     if not ASSETS_PATH.exists():
-        logger.warning(f"Assets folder not found: {ASSETS_PATH}")
+        logger.warning(f"[IMAGE_GEN] Assets folder not found: {ASSETS_PATH}")
         return []
 
     images = []
@@ -62,11 +60,11 @@ def _get_reference_images() -> list[str]:
                 data_uri = f"data:{mime_type};base64,{base64_data}"
                 images.append(data_uri)
 
-                logger.debug(f"Loaded reference image: {file_path.name}")
+                logger.debug(f"[IMAGE_GEN] Loaded reference image: {file_path.name}")
             except Exception as e:
-                logger.error(f"Error loading image {file_path}: {e}")
+                logger.error(f"[IMAGE_GEN] Error loading image {file_path}: {e}")
 
-    logger.info(f"Loaded {len(images)} reference images from assets")
+    logger.info(f"[IMAGE_GEN] Loaded {len(images)} reference images from assets")
     return images
 
 
@@ -104,16 +102,10 @@ async def generate_image(prompt: str) -> bytes:
     Returns:
         Raw image bytes (PNG format).
     """
-    logger.info(f"Generating image for prompt: {prompt[:100]}...")
-
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://pippinlovesdot.com",
-        "X-Title": "DOT Twitter Bot"
-    }
+    logger.info(f"[IMAGE_GEN] Starting generation for prompt: {prompt[:100]}...")
 
     reference_images = _select_reference_images(2)
+    logger.info(f"[IMAGE_GEN] Using {len(reference_images)} reference images")
 
     # Build content array with images and text
     content = []
@@ -146,14 +138,18 @@ async def generate_image(prompt: str) -> bytes:
         ]
     }
 
+    logger.info(f"[IMAGE_GEN] Sending request to OpenRouter")
+
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             OPENROUTER_URL,
-            headers=headers,
+            headers=get_openrouter_headers(),
             json=payload
         )
         response.raise_for_status()
         data = response.json()
+
+        logger.info(f"[IMAGE_GEN] Response received")
 
         # Extract image from response - images are in message.images array
         message = data.get("choices", [{}])[0].get("message", {})
@@ -166,7 +162,8 @@ async def generate_image(prompt: str) -> bytes:
                 # Extract base64 from data URI (remove "data:image/...;base64," prefix)
                 base64_data = image_url.split(",", 1)[1]
                 image_bytes = base64.b64decode(base64_data)
-                logger.info(f"Generated image: {len(image_bytes)} bytes")
+                logger.info(f"[IMAGE_GEN] Generated image: {len(image_bytes)} bytes")
                 return image_bytes
 
+        logger.error(f"[IMAGE_GEN] No image data in response: {list(message.keys())}")
         raise ValueError(f"No image data in response: {list(message.keys())}")

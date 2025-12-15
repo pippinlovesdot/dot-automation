@@ -16,7 +16,7 @@ from services.llm import LLMClient
 from services.twitter import TwitterClient
 from tools.registry import TOOLS, get_tools_description
 from config.personality import SYSTEM_PROMPT
-from config.prompts.agent_autopost import AGENT_PROMPT_TEMPLATE
+from config.prompts.agent_autopost import AUTOPOST_AGENT_PROMPT
 from config.schemas import PLAN_SCHEMA, POST_TEXT_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def get_agent_system_prompt() -> str:
     automatically makes it available to the agent.
     """
     tools_desc = get_tools_description()
-    return AGENT_PROMPT_TEMPLATE.format(tools_desc=tools_desc)
+    return AUTOPOST_AGENT_PROMPT.format(tools_desc=tools_desc)
 
 
 class AutoPostService:

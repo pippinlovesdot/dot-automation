@@ -1,60 +1,72 @@
 """
-Tool registry for LLM function calling.
+Tool registry with auto-discovery.
 
-Contains all available tools and their JSON schemas for OpenAI-style function calling.
-Add your custom tools here to extend the bot's capabilities.
+Automatically discovers tools from the tools/ directory.
+Each tool file should export:
+- TOOL_SCHEMA: OpenAI-style function calling schema
+- The function with the same name as schema["function"]["name"]
 """
 
-from tools.web_search import web_search
-from tools.image_generation import generate_image
+import importlib
+import logging
+import pkgutil
+from pathlib import Path
 
-# Registry of available tools (function references)
-TOOLS = {
-    "web_search": web_search,
-    "generate_image": generate_image
-}
+logger = logging.getLogger(__name__)
 
-# JSON Schema definitions for tools (OpenAI function calling format)
-TOOLS_SCHEMA = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Search the web for current information. Use this when you need to find recent news, events, prices, facts, or any information that might not be in your training data.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to look up"
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of search results (1-10, default 5)"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_image",
-            "description": "Generate an image based on a text description. Uses reference images from assets folder for consistent character appearance.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Text description of the image to generate"
-                    }
-                },
-                "required": ["prompt"]
-            }
-        }
-    }
-]
+
+def _discover_tools() -> tuple[dict, list]:
+    """
+    Auto-discover all tools in tools/ directory.
+
+    Scans all Python modules in the tools/ directory and collects:
+    - Tool functions (callable)
+    - Tool schemas (for LLM function calling)
+
+    Returns:
+        Tuple of (tools dict, schemas list).
+    """
+    tools = {}
+    schemas = []
+
+    tools_path = Path(__file__).parent
+
+    for _, module_name, _ in pkgutil.iter_modules([str(tools_path)]):
+        # Skip registry and __init__
+        if module_name in ("registry", "__init__"):
+            continue
+
+        try:
+            module = importlib.import_module(f"tools.{module_name}")
+
+            # Check if module exports TOOL_SCHEMA
+            if hasattr(module, "TOOL_SCHEMA"):
+                schema = module.TOOL_SCHEMA
+                tool_name = schema["function"]["name"]
+
+                # Get the tool function
+                if hasattr(module, tool_name):
+                    tool_func = getattr(module, tool_name)
+                    tools[tool_name] = tool_func
+                    schemas.append(schema)
+                    logger.debug(f"[REGISTRY] Discovered tool: {tool_name}")
+                else:
+                    logger.warning(
+                        f"[REGISTRY] Tool {module_name} has TOOL_SCHEMA "
+                        f"but no function named '{tool_name}'"
+                    )
+            else:
+                logger.debug(f"[REGISTRY] Skipping {module_name}: no TOOL_SCHEMA")
+
+        except Exception as e:
+            logger.error(f"[REGISTRY] Error loading tool {module_name}: {e}")
+
+    logger.info(f"[REGISTRY] Discovered {len(tools)} tools: {list(tools.keys())}")
+    return tools, schemas
+
+
+# Auto-discover tools on module load
+TOOLS, TOOLS_SCHEMA = _discover_tools()
 
 
 def get_tools_description() -> str:
@@ -62,7 +74,10 @@ def get_tools_description() -> str:
     Generate human-readable tools description from TOOLS_SCHEMA.
 
     Used in agent prompts so LLM knows what tools are available.
-    When you add a new tool to TOOLS_SCHEMA, it automatically appears in agent prompts.
+    When you add a new tool with TOOL_SCHEMA, it automatically appears here.
+
+    Returns:
+        Formatted string describing all available tools.
     """
     lines = ["### Available Tools:"]
 
@@ -82,3 +97,11 @@ def get_tools_description() -> str:
             lines.append(f"   - {param_name}: {param_info['description']} {req}")
 
     return "\n".join(lines)
+
+
+def refresh_tools() -> None:
+    """
+    Re-discover tools (useful if tools are added at runtime).
+    """
+    global TOOLS, TOOLS_SCHEMA
+    TOOLS, TOOLS_SCHEMA = _discover_tools()

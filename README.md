@@ -113,16 +113,18 @@ Each layer feeds into the next. Your agent behaves consistently across thousands
 
 ## Architecture
 
-The system operates on **two triggers**:
+The system operates on **two autonomous agent triggers**:
 
-| Scheduled Posts (Agent) | Mention Responses |
-|-------------------------|-------------------|
+| Scheduled Posts (Agent) | Mention Responses (Agent) |
+|-------------------------|---------------------------|
 | Cron-based (configurable interval) | Polling-based (configurable interval) |
-| Agent creates plan → executes tools → generates post | Handles mentions & replies |
-| Dynamic tool usage (web search, image generation) | LLM chooses which mention to reply to |
-| Posts to Twitter with optional media | LLM generates response + optional image |
+| Agent creates plan → executes tools → generates post | Agent selects mentions → plans per mention → generates replies |
+| Dynamic tool usage (web search, image generation) | 3 LLM calls per mention (select → plan → reply) |
+| Posts to Twitter with optional media | Tracks tools used per reply |
 
-**Agent Architecture:** The autoposting system uses an autonomous agent that decides which tools to use based on context. It can search the web for current information, generate images, or post without any tools — whatever makes the best tweet.
+**Agent Architecture:** Both systems use autonomous agents that decide which tools to use based on context. The mention agent can process multiple mentions per batch, creating individual plans for each selected mention.
+
+**Auto-Discovery Tools:** Tools are automatically discovered from the `tools/` directory. Add a new tool file with `TOOL_SCHEMA` and it's available to agents without any registry changes.
 
 This separation keeps the codebase simple while enabling both proactive and reactive behavior.
 
@@ -223,8 +225,10 @@ my-agent/
 │   │   ├── beliefs.py       # Values and priorities
 │   │   └── instructions.py  # Communication style
 │   └── prompts/             # LLM prompts (modular)
-│       ├── agent_autopost.py    # Agent planning prompt
-│       └── mention_selector.py  # Mention handling prompt
+│       ├── agent_autopost.py         # Agent planning prompt
+│       ├── mention_selector.py       # Legacy mention selector (v1.2)
+│       ├── mention_selector_agent.py # Agent mention selection (v1.3)
+│       └── mention_reply_agent.py    # Agent reply planning (v1.3)
 │
 ├── utils/
 │   └── api.py               # OpenRouter API configuration
@@ -238,9 +242,9 @@ my-agent/
 │   └── database.py          # PostgreSQL for history + metrics
 │
 ├── tools/
-│   ├── registry.py          # Available tools for LLM
+│   ├── registry.py          # Auto-discovery tool registry
 │   ├── web_search.py        # Web search via OpenRouter plugins
-│   └── image_generation.py  # Image generation tool
+│   └── image_generation.py  # Image generation with reference images
 │
 ├── main.py                  # FastAPI + APScheduler entry point
 ├── requirements.txt         # Dependencies
@@ -294,35 +298,42 @@ Agent thinks: "I want to post about crypto trends with a visual"
 
 ### Mention Handler (`services/mentions.py`)
 
-Monitors Twitter mentions and generates contextual replies using polling.
+Agent-based mention processing with 3 LLM calls per mention (v1.3).
 
 **How it works:**
 1. Polls Twitter API for new mentions every 20 minutes (configurable)
 2. Filters out already-processed mentions using database
-3. Sends all new mentions to LLM in a single request
-4. LLM selects which mention to reply to (or none if not worth replying)
-5. LLM returns structured response: `{selected_tweet_id, text, include_picture, reasoning}`
-6. If a mention is selected, generates optional image and posts reply
-7. Saves mention interaction to database for history
+3. **LLM #1: Selection** — Evaluates all mentions, returns array of worth replying to (with priority)
+4. For EACH selected mention:
+   - Gets user conversation history from database
+   - **LLM #2: Planning** — Creates plan (which tools to use)
+   - Executes tools (web_search, generate_image)
+   - **LLM #3: Reply** — Generates final reply text
+   - Uploads image if generated, posts reply
+   - Saves interaction with tools_used tracking
+5. Returns batch summary
 
-**Why single-call selection:** Instead of replying to every mention, the LLM evaluates all pending mentions and picks the most interesting one. This creates more authentic engagement — your agent chooses conversations worth having, just like a real person would.
+**Why agent architecture:** Instead of a single LLM call for all mentions, each mention gets individual attention. The agent can use tools to research topics, generate custom images, and craft contextually appropriate replies. User conversation history enables personalized interactions.
 
 **Configuration:**
 - `MENTIONS_INTERVAL_MINUTES` — Time between mention checks (default: 20)
+- `MENTIONS_WHITELIST` — Optional list of usernames for testing (empty = all users)
 - Requires Twitter API Basic tier or higher for mention access
 
-### Image Generation (`services/image_gen.py`)
+### Image Generation (`tools/image_generation.py`)
 
 Generates images using Gemini 3 Pro via OpenRouter, with support for reference images.
 
-**How `assets/` folder works:**
-- Place 1 or more reference images in `assets/` folder (supports: jpg, png, jpeg, gif, webp)
-- Bot randomly selects up to 2 images as style/character reference
+**How `assets/` folder works (v1.3):**
+- Place reference images in `assets/` folder (supports: png, jpg, jpeg, gif, webp, jfif)
+- Bot uses **ALL** reference images (not random selection) for maximum consistency
 - Reference images are sent to the model along with the generation prompt
 - If `assets/` is empty, images are generated without reference (pure text-to-image)
 - Use reference images to maintain consistent character appearance across posts
 
-**Example use case:** Place photos of your bot's character/avatar in `assets/`. The model will use these as reference when generating new images, keeping the visual style consistent.
+**Auto-discovery:** Tool exports `TOOL_SCHEMA` and is automatically available to agents.
+
+**Example use case:** Place photos of your bot's character/avatar in `assets/`. The model will use all of them as reference when generating new images, keeping the visual style consistent.
 
 ### Personality (`config/personality/`)
 

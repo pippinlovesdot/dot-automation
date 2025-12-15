@@ -2,7 +2,7 @@
 DOT Twitter Bot - Auto-posting and Mention Handling.
 
 FastAPI application with APScheduler for scheduled posts.
-Version 1.2.2 - Infrastructure improvements.
+Version 1.3.0 - Agent-based Mentions + Auto-discovery Tools.
 """
 
 import logging
@@ -44,8 +44,8 @@ async def lifespan(app: FastAPI):
     await db.connect()
     logger.info("Database connected")
 
-    # Initialize tier manager - detect API tier and limits
-    tier_manager = TierManager()
+    # Initialize tier manager - detect API tier and limits (with db for fallback)
+    tier_manager = TierManager(db)
     await tier_manager.initialize()
 
     # Initialize services with tier manager
@@ -64,6 +64,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to get Twitter account info: {e}")
 
+    # Schedule autopost
+    scheduler.add_job(
+        autopost_service.run,
+        "interval",
+        minutes=settings.post_interval_minutes,
+        id="autopost"
+    )
+    logger.info(f"Scheduled autopost every {settings.post_interval_minutes} minutes")
+
+    # Schedule mentions processing only if tier supports it
+    can_mentions, mentions_reason = tier_manager.can_use_mentions()
+    if can_mentions:
+        scheduler.add_job(
+            mention_handler.check_mentions,
+            "interval",
+            minutes=settings.mentions_interval_minutes,
+            id="mentions",
+            kwargs={"dry_run": False}
+        )
+        logger.info(f"Scheduled mentions every {settings.mentions_interval_minutes} minutes")
+    else:
+        logger.info(f"Mentions scheduling skipped: {mentions_reason}")
+
     # Schedule hourly tier check (auto-detect subscription upgrades)
     scheduler.add_job(
         tier_manager.maybe_refresh_tier,
@@ -72,7 +95,7 @@ async def lifespan(app: FastAPI):
         id="tier_refresh"
     )
     scheduler.start()
-    logger.info("Scheduler started: hourly tier refresh enabled")
+    logger.info("Scheduler started (autopost + mentions + tier refresh)")
 
     yield
 
@@ -85,8 +108,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="DOT Twitter Bot",
-    description="Agent-based auto-posting Twitter bot with mention handling",
-    version="1.2.2",
+    description="Agent-based auto-posting Twitter bot with agent-based mention handling",
+    version="1.3.0",
     lifespan=lifespan
 )
 
@@ -100,7 +123,7 @@ async def health_check():
         "database": "connected" if db_ok else "disconnected",
         "scheduler_running": scheduler.running,
         "tier": tier_manager.tier if tier_manager else "unknown",
-        "version": "1.2.2"
+        "version": "1.3.0"
     }
 
 
@@ -130,7 +153,12 @@ async def oauth_callback(oauth_token: str = None, oauth_verifier: str = None):
 
 @app.post("/webhook/mentions")
 async def handle_mentions_webhook(request: Request):
-    """Handle incoming Twitter webhook for mentions."""
+    """
+    Handle incoming Twitter webhook for mentions.
+
+    Note: Webhook-based mentions require Enterprise tier.
+    For Basic/Pro tiers, use polling via /process-mentions endpoint.
+    """
     if mention_handler is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -138,11 +166,14 @@ async def handle_mentions_webhook(request: Request):
         data = await request.json()
         logger.info(f"Received mention webhook: {data}")
 
-        if "tweet_create_events" in data:
-            for tweet in data["tweet_create_events"]:
-                await mention_handler.handle(tweet)
+        # Webhook-based processing is not supported with agent architecture
+        # Use /process-mentions polling endpoint instead
+        logger.warning("[WEBHOOK] Webhook received but agent architecture uses polling. Use /process-mentions instead.")
 
-        return {"status": "processed"}
+        return {
+            "status": "received",
+            "message": "Webhook received. Use /process-mentions for agent-based processing."
+        }
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         raise HTTPException(status_code=500, detail=str(e))

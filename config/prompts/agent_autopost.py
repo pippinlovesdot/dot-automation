@@ -5,7 +5,7 @@ Used by AutoPostService for planning and executing posts.
 Contains {tools_desc} placeholder for dynamic tool injection.
 """
 
-AGENT_PROMPT_TEMPLATE = """
+AUTOPOST_AGENT_PROMPT = """
 ## You are an autonomous Twitter posting agent
 
 Your job is to create engaging Twitter posts. You can use tools to gather information or create media.

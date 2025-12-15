@@ -149,15 +149,31 @@ LLM prompts for specific services:
 - Contains `{tools_desc}` placeholder for dynamic tool injection
 
 **`mention_selector.py`** — `MENTION_SELECTOR_PROMPT`
-- Instructions for selecting and responding to mentions
+- Legacy mention selector (v1.2)
 - Criteria for what to reply to and what to ignore
+
+**`mention_selector_agent.py`** — `MENTION_SELECTOR_AGENT_PROMPT` (v1.3)
+- Instructions for selecting multiple mentions worth replying to
+- Returns array of selected mentions with priority
+
+**`mention_reply_agent.py`** — `MENTION_REPLY_AGENT_PROMPT` (v1.3)
+- Instructions for planning and generating individual replies
+- Contains `{tools_desc}` placeholder for dynamic tool injection
 
 ### config/schemas.py
 JSON schemas for structured LLM output:
 
-**`PLAN_SCHEMA`** — Agent plan format `{reasoning, plan: [{tool, params}]}`
-**`POST_TEXT_SCHEMA`** — Final tweet format `{post_text}`
-**`MENTION_SELECTOR_SCHEMA`** — Mention response format `{selected_tweet_id, text, include_picture, reasoning}`
+**Autopost schemas:**
+- **`PLAN_SCHEMA`** — Agent plan format `{reasoning, plan: [{tool, params}]}`
+- **`POST_TEXT_SCHEMA`** — Final tweet format `{post_text}`
+
+**Legacy mention schema (v1.2):**
+- **`MENTION_SELECTOR_SCHEMA`** — Single mention response `{selected_tweet_id, text, include_picture, reasoning}`
+
+**Agent-based mention schemas (v1.3):**
+- **`MENTION_SELECTION_SCHEMA`** — Array of selected mentions `{selected_mentions: [{tweet_id, priority, reasoning, suggested_approach}]}`
+- **`MENTION_PLAN_SCHEMA`** — Reply plan format `{reasoning, plan: [{tool, params}]}`
+- **`REPLY_TEXT_SCHEMA`** — Final reply format `{reply_text}`
 
 ### services/autopost.py
 `AutoPostService` class — agent-based autoposting with tool execution.
@@ -194,29 +210,56 @@ The agent operates in a continuous conversation, creating a plan and executing t
 - Dynamic tool discovery via `get_tools_description()` from registry
 
 ### services/mentions.py
-`MentionHandler` class processes Twitter mentions.
+`MentionAgentHandler` class — agent-based mention processing (v1.3).
 
-Flow:
+**Agent Architecture (3 LLM calls per mention):**
+
+**Flow:**
 1. Fetches recent mentions from Twitter API
 2. Filters out already-processed mentions using database
-3. Sends all unprocessed mentions to LLM in single request
-4. LLM selects ONE mention to reply to (or none if all low quality)
-5. LLM returns selection + reply text + image decision
-6. If mention selected, optionally generates image
-7. Posts reply to Twitter
-8. Saves interaction to database
+3. Optional: Filters by whitelist (for testing)
+4. **LLM Call #1:** Select mentions worth replying to (returns array)
+5. For EACH selected mention:
+   a. Get user conversation history from database
+   b. **LLM Call #2:** Create plan `{reasoning, plan: [{tool, params}]}`
+   c. Execute tools (web_search, generate_image)
+   d. **LLM Call #3:** Generate final reply text
+   e. Upload image if generated
+   f. Post reply to Twitter
+   g. Save to database with tools_used tracking
+6. Return batch summary
 
-Structured output schema:
+**Selection Schema (LLM #1):**
 ```json
 {
-  "selected_tweet_id": "string (tweet ID to reply to, empty if none)",
-  "text": "string (reply text, max 280 chars)",
-  "include_picture": "boolean",
-  "reasoning": "string (why this mention was selected)"
+  "selected_mentions": [
+    {
+      "tweet_id": "123456",
+      "priority": 1,
+      "reasoning": "Why this mention is worth replying to",
+      "suggested_approach": "Brief hint for how to reply"
+    }
+  ]
 }
 ```
 
-**Design decision:** LLM evaluates ALL pending mentions and picks the best one, rather than replying to every mention. This creates more authentic engagement.
+**Plan Schema (LLM #2):**
+```json
+{
+  "reasoning": "How to approach this reply",
+  "plan": [
+    {"tool": "web_search", "params": {"query": "..."}},
+    {"tool": "generate_image", "params": {"prompt": "..."}}
+  ]
+}
+```
+
+**Design decisions:**
+- LLM selects MULTIPLE mentions (with priority) instead of just one
+- Each mention gets individual planning and tool execution
+- User conversation history provides context for personalized replies
+- Empty plan `[]` is valid — most replies don't need tools
+- Tracks which tools were used for analytics
 
 ### services/llm.py
 `LLMClient` class — async client for OpenRouter API.
@@ -302,26 +345,54 @@ TIER_FEATURES = {
 - Both services receive `tier_manager` instance via constructor
 
 ### tools/registry.py
-Tool registry for agent function calling. Contains:
-- `TOOLS` — dict mapping tool names to async functions
-- `TOOLS_SCHEMA` — list of JSON schemas in OpenAI function calling format
+Tool registry with **auto-discovery** (v1.3).
+
+**How it works:**
+- Uses `pkgutil.iter_modules()` to scan all Python files in `tools/` directory
+- Each tool file that exports `TOOL_SCHEMA` is automatically registered
+- Tool function must have the same name as `schema["function"]["name"]`
+
+**Exports:**
+- `TOOLS` — dict mapping tool names to async functions (auto-populated)
+- `TOOLS_SCHEMA` — list of JSON schemas in OpenAI function calling format (auto-populated)
 - `get_tools_description()` — generates human-readable tool descriptions for agent prompts
+- `refresh_tools()` — re-scan tools at runtime
 
 **Available tools:**
 - `web_search` — real-time web search via OpenRouter plugins
 - `generate_image` — image generation using Gemini 3 Pro
 
-**Dynamic tool discovery:**
-The `get_tools_description()` function automatically generates tool documentation from `TOOLS_SCHEMA`. When you add a new tool, it appears in the agent's system prompt automatically.
+**To add a new tool (zero registry changes needed):**
+1. Create `tools/my_tool.py`
+2. Add `TOOL_SCHEMA` constant with OpenAI function calling format
+3. Create async function with matching name
+4. Done! Tool is auto-discovered on startup
 
-To add a new tool:
-1. Create tool function in `tools/` directory
-2. Import and add to `TOOLS` dict
-3. Add JSON schema to `TOOLS_SCHEMA` list
-4. The agent will automatically see and be able to use it
+Example:
+```python
+# tools/my_tool.py
+TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "my_tool",
+        "description": "What this tool does",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "..."}},
+            "required": ["query"]
+        }
+    }
+}
+
+async def my_tool(query: str) -> dict:
+    # Implementation
+    return {"result": "..."}
+```
 
 ### tools/web_search.py
 Web search using OpenRouter's native web search plugin.
+
+**Auto-discovery:** Exports `TOOL_SCHEMA` for automatic registration.
 
 **How it works:**
 - Uses `plugins: [{id: "web"}]` parameter in OpenRouter API
@@ -337,8 +408,11 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
 ### tools/image_generation.py
 Image generation using Gemini 3 Pro via OpenRouter.
 
-**How it works:**
-- Loads reference images from `assets/` folder (up to 2 randomly selected)
+**Auto-discovery:** Exports `TOOL_SCHEMA` for automatic registration.
+
+**How it works (v1.3):**
+- Loads ALL reference images from `assets/` folder (not random selection)
+- Supports `.png`, `.jpg`, `.jpeg`, `.jfif`, `.gif`, `.webp` formats
 - Sends reference images + prompt to model for consistent character appearance
 - Returns raw image bytes (PNG format)
 
@@ -401,59 +475,62 @@ CREATE TABLE bot_state (
     → Database.save_post()
 ```
 
-### Mention Handling
+### Mention Handling (Agent Architecture v1.3)
 ```
 [Scheduler]
-    → MentionHandler.process_mentions_batch()
+    → MentionAgentHandler.process_mentions_batch()
     → TwitterClient.get_mentions()
     → Database.mention_exists() [filter processed]
-    → LLMClient.generate_structured()
-        → returns {selected_tweet_id, text, include_picture, reasoning}
-    → [if selected] ImageGenerator.generate() [optional]
-    → [if selected] TwitterClient.upload_media() [optional]
-    → [if selected] TwitterClient.reply()
-    → Database.save_mention()
+    → [optional] Filter by MENTIONS_WHITELIST
+    → LLM Call #1: Select mentions
+        → returns {selected_mentions: [{tweet_id, priority, reasoning, suggested_approach}]}
+    → For EACH selected mention:
+        → Database.get_user_mention_history()
+        → LLM Call #2: Create plan
+            → returns {reasoning, plan: [{tool, params}]}
+        → For each tool in plan:
+            → Execute tool (web_search or generate_image)
+            → Add result to conversation
+        → LLM Call #3: Generate reply
+            → returns {reply_text}
+        → [if image_bytes] TwitterClient.upload_media()
+        → TwitterClient.reply()
+        → Database.save_mention(tools_used=...)
 ```
 
 ---
 
 ## Extension Points
 
-### Adding a new tool
-1. Create `tools/my_tool.py`:
+### Adding a new tool (Auto-discovery v1.3)
+Create `tools/my_tool.py` with `TOOL_SCHEMA` — no registry changes needed:
+
 ```python
-async def my_tool(query: str) -> str:
-    # Implementation
-    return result
-```
+# tools/my_tool.py
 
-2. Update `tools/registry.py`:
-```python
-from tools.my_tool import my_tool
-
-TOOLS = {
-    "my_tool": my_tool
-}
-
-TOOLS_SCHEMA = [
-    {
-        "type": "function",
-        "function": {
-            "name": "my_tool",
-            "description": "What this tool does",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "..."}
-                },
-                "required": ["query"]
-            }
+TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "my_tool",
+        "description": "What this tool does",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"}
+            },
+            "required": ["query"]
         }
     }
-]
+}
+
+async def my_tool(query: str) -> dict:
+    # Implementation
+    return {"result": "..."}
 ```
 
-3. Update `services/mentions.py` to handle tool execution in the response flow.
+The tool is automatically discovered and available to agents on restart.
+
+**Note:** To handle new tools in mentions, add execution logic to `services/mentions.py` `_process_single_mention()` method.
 
 ### Changing LLM model
 Edit `services/llm.py`, change `TEXT_MODEL` constant to any OpenRouter model ID.

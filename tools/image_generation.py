@@ -7,7 +7,6 @@ Uses google/gemini-3-pro-image-preview model via OpenRouter.
 
 import base64
 import logging
-import random
 from pathlib import Path
 
 import httpx
@@ -17,11 +16,44 @@ from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
 
+# Tool schema for auto-discovery
+TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "generate_image",
+        "description": "Generate an image based on a text description. Uses reference images from assets folder for consistent character appearance.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Text description of the image to generate"
+                }
+            },
+            "required": ["prompt"]
+        }
+    }
+}
+
 # Path to reference images folder
 ASSETS_PATH = Path(__file__).parent.parent / "assets"
 
 # System prompt for image generation
-IMAGE_SYSTEM_PROMPT = """You are an image generation assistant. Your task is to generate images based on reference images provided and user instructions. Always output an image."""
+# TODO: Replace with your actual image generation prompt
+IMAGE_SYSTEM_PROMPT = """You are an image generation assistant.
+
+Your task is to generate images based on:
+1. Reference images provided (for consistent character appearance)
+2. User's text description
+
+Guidelines:
+- Always output an image
+- Maintain character consistency with reference images
+- Follow the user's prompt for scene, action, and style
+- Characters should be small in frame (8-15% of image)
+- Create visually interesting and varied compositions
+
+Generate the image now based on the user's prompt."""
 
 
 def _get_reference_images() -> list[str]:
@@ -36,7 +68,7 @@ def _get_reference_images() -> list[str]:
         return []
 
     images = []
-    supported_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    supported_extensions = {".png", ".jpg", ".jpeg", ".jfif", ".gif", ".webp"}
 
     for file_path in ASSETS_PATH.iterdir():
         if file_path.suffix.lower() in supported_extensions:
@@ -50,6 +82,7 @@ def _get_reference_images() -> list[str]:
                     ".png": "image/png",
                     ".jpg": "image/jpeg",
                     ".jpeg": "image/jpeg",
+                    ".jfif": "image/jpeg",
                     ".gif": "image/gif",
                     ".webp": "image/webp"
                 }
@@ -68,33 +101,12 @@ def _get_reference_images() -> list[str]:
     return images
 
 
-def _select_reference_images(count: int = 2) -> list[str]:
-    """
-    Select reference images for generation.
-
-    Args:
-        count: Number of images to select.
-
-    Returns:
-        List of base64-encoded images.
-    """
-    all_images = _get_reference_images()
-
-    if not all_images:
-        return []
-
-    if len(all_images) <= count:
-        return all_images
-
-    return random.sample(all_images, count)
-
-
 async def generate_image(prompt: str) -> bytes:
     """
     Generate an image from a text prompt using reference images.
 
     This is the main tool function for image generation.
-    Uses reference images from assets/ folder for consistent character appearance.
+    Uses ALL reference images from assets/ folder for consistent character appearance.
 
     Args:
         prompt: Text description of the image to generate.
@@ -104,8 +116,9 @@ async def generate_image(prompt: str) -> bytes:
     """
     logger.info(f"[IMAGE_GEN] Starting generation for prompt: {prompt[:100]}...")
 
-    reference_images = _select_reference_images(2)
-    logger.info(f"[IMAGE_GEN] Using {len(reference_images)} reference images")
+    # Use ALL reference images (not random selection)
+    reference_images = _get_reference_images()
+    logger.info(f"[IMAGE_GEN] Using ALL {len(reference_images)} reference images")
 
     # Build content array with images and text
     content = []

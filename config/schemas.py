@@ -105,3 +105,118 @@ POST_TEXT_SCHEMA = {
         }
     }
 }
+
+# ==================== v1.3.0 Schemas ====================
+
+# Schema for mention selection (array of selected mentions)
+MENTION_SELECTION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mention_selection",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "selected_mentions": {
+                    "type": "array",
+                    "description": "List of mentions worth replying to",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tweet_id": {
+                                "type": "string",
+                                "description": "The tweet_id of the selected mention"
+                            },
+                            "priority": {
+                                "type": "integer",
+                                "description": "Priority order (1 = highest priority)"
+                            },
+                            "reasoning": {
+                                "type": "string",
+                                "description": "Why this mention is worth replying to"
+                            },
+                            "suggested_approach": {
+                                "type": "string",
+                                "description": "Brief suggestion for how to approach this reply"
+                            }
+                        },
+                        "required": ["tweet_id", "priority", "reasoning", "suggested_approach"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["selected_mentions"],
+            "additionalProperties": False
+        }
+    }
+}
+
+# Schema for mention reply plan (agent decides tools freely)
+MENTION_PLAN_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mention_plan",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "reasoning": {
+                    "type": "string",
+                    "description": "Your reasoning about how to reply to this mention"
+                },
+                "plan": {
+                    "type": "array",
+                    "description": "List of tools to execute (can be empty if no tools needed)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {
+                                "type": "string",
+                                "description": "Tool name from available tools"
+                            },
+                            "params": {
+                                "type": "object",
+                                "description": "Parameters for the tool",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query (for web_search)"
+                                    },
+                                    "prompt": {
+                                        "type": "string",
+                                        "description": "Image prompt (for generate_image)"
+                                    }
+                                },
+                                "additionalProperties": False
+                            }
+                        },
+                        "required": ["tool", "params"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["reasoning", "plan"],
+            "additionalProperties": False
+        }
+    }
+}
+
+# Schema for final reply text
+REPLY_TEXT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "reply_text",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "reply_text": {
+                    "type": "string",
+                    "description": "The final reply text (max 280 characters)"
+                }
+            },
+            "required": ["reply_text"],
+            "additionalProperties": False
+        }
+    }
+}

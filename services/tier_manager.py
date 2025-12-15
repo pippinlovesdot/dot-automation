@@ -60,7 +60,10 @@ class TierManager:
     - Warnings at 80%/90% usage
     """
 
-    def __init__(self):
+    def __init__(self, db=None):
+        # Database for fallback storage
+        self.db = db
+
         # Tier info
         self.tier: str | None = None
         self.project_id: str | None = None

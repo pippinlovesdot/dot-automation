@@ -15,6 +15,29 @@ from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
 
+# Tool schema for auto-discovery
+TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the web for current information. Use this when you need to find recent news, events, prices, facts, or any information that might not be in your training data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to look up"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of search results (1-10, default 5)"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
 
 async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
     """

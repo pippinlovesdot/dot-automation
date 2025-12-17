@@ -101,7 +101,7 @@ def _get_reference_images() -> list[str]:
     return images
 
 
-async def generate_image(prompt: str) -> bytes:
+async def generate_image(prompt: str) -> bytes | None:
     """
     Generate an image from a text prompt using reference images.
 
@@ -112,7 +112,7 @@ async def generate_image(prompt: str) -> bytes:
         prompt: Text description of the image to generate.
 
     Returns:
-        Raw image bytes (PNG format).
+        Raw image bytes (PNG format), or None on error.
     """
     logger.info(f"[IMAGE_GEN] Starting generation for prompt: {prompt[:100]}...")
 
@@ -153,14 +153,15 @@ async def generate_image(prompt: str) -> bytes:
 
     logger.info(f"[IMAGE_GEN] Sending request to OpenRouter")
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            OPENROUTER_URL,
-            headers=get_openrouter_headers(),
-            json=payload
-        )
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                OPENROUTER_URL,
+                headers=get_openrouter_headers(),
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
 
         logger.info(f"[IMAGE_GEN] Response received")
 
@@ -179,4 +180,14 @@ async def generate_image(prompt: str) -> bytes:
                 return image_bytes
 
         logger.error(f"[IMAGE_GEN] No image data in response: {list(message.keys())}")
-        raise ValueError(f"No image data in response: {list(message.keys())}")
+        return None
+
+    except httpx.TimeoutException:
+        logger.error(f"[IMAGE_GEN] Timeout after 120s - prompt: {prompt[:50]}...")
+        return None
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[IMAGE_GEN] API error: {e.response.status_code}")
+        return None
+    except Exception as e:
+        logger.error(f"[IMAGE_GEN] Unexpected error: {e}")
+        return None

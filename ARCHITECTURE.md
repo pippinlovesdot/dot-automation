@@ -260,6 +260,7 @@ The agent operates in a continuous conversation, creating a plan and executing t
 - User conversation history provides context for personalized replies
 - Empty plan `[]` is valid — most replies don't need tools
 - Tracks which tools were used for analytics
+- Plan validation (v1.3.2): max 3 tools, generate_image must be last
 
 ### services/llm.py
 `LLMClient` class — async client for OpenRouter API.
@@ -403,7 +404,12 @@ Web search using OpenRouter's native web search plugin.
 ```python
 async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
     # Returns {"content": "...", "sources": [...]}
+    # On error: {"content": "error message", "sources": [], "error": True}
 ```
+
+**Error handling (v1.3.2):**
+- Returns `{"error": True}` on timeout, HTTP errors, or unexpected exceptions
+- Agent receives error message and can continue with degraded results
 
 ### tools/image_generation.py
 Image generation using Gemini 3 Pro via OpenRouter.
@@ -414,13 +420,17 @@ Image generation using Gemini 3 Pro via OpenRouter.
 - Loads ALL reference images from `assets/` folder (not random selection)
 - Supports `.png`, `.jpg`, `.jpeg`, `.jfif`, `.gif`, `.webp` formats
 - Sends reference images + prompt to model for consistent character appearance
-- Returns raw image bytes (PNG format)
+- Returns raw image bytes (PNG format) or `None` on error (v1.3.2)
 
 **Function signature:**
 ```python
-async def generate_image(prompt: str) -> bytes:
-    # Returns image bytes
+async def generate_image(prompt: str) -> bytes | None:
+    # Returns image bytes, or None on error
 ```
+
+**Error handling (v1.3.2):**
+- Returns `None` on timeout, HTTP errors, or missing image data
+- Caller (autopost/mentions) continues without image if generation fails
 
 ---
 

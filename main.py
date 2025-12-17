@@ -1,8 +1,8 @@
 """
-DOT Twitter Bot - Auto-posting and Mention Handling.
+Twitter Agent Bot - Auto-posting and Mention Handling.
 
 FastAPI application with APScheduler for scheduled posts.
-Version 1.3.0 - Agent-based Mentions + Auto-discovery Tools.
+Version 1.3.2 - Improved Logging + Error Handling.
 """
 
 import logging
@@ -107,9 +107,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="DOT Twitter Bot",
-    description="Agent-based auto-posting Twitter bot with agent-based mention handling",
-    version="1.3.0",
+    title="Twitter Agent Bot",
+    description="Agent-based auto-posting Twitter bot with mention handling",
+    version="1.3.2",
     lifespan=lifespan
 )
 
@@ -123,7 +123,7 @@ async def health_check():
         "database": "connected" if db_ok else "disconnected",
         "scheduler_running": scheduler.running,
         "tier": tier_manager.tier if tier_manager else "unknown",
-        "version": "1.3.0"
+        "version": "1.3.2"
     }
 
 

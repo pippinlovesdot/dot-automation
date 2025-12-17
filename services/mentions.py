@@ -12,6 +12,7 @@ Processes Twitter mentions using autonomous agent architecture:
 
 import json
 import logging
+import time
 from typing import Any
 
 from services.database import Database
@@ -44,6 +45,34 @@ class MentionAgentHandler:
         self.twitter = TwitterClient()
         self.tier_manager = tier_manager
 
+    def _validate_plan(self, plan: list[dict]) -> None:
+        """
+        Validate the agent's plan.
+
+        Rules:
+        - generate_image must be last if present
+        - Only known tools allowed
+        - Max 3 steps
+        """
+        if len(plan) > 3:
+            raise ValueError(f"Plan too long: {len(plan)} steps (max 3)")
+
+        has_image = False
+        for i, step in enumerate(plan):
+            tool_name = step.get("tool")
+
+            if tool_name not in TOOLS:
+                raise ValueError(f"Unknown tool: {tool_name}")
+
+            if tool_name == "generate_image":
+                if has_image:
+                    raise ValueError("Multiple generate_image calls not allowed")
+                if i != len(plan) - 1:
+                    raise ValueError("generate_image must be the last step in plan")
+                has_image = True
+
+        logger.info(f"[MENTIONS] Plan validated: {len(plan)} steps")
+
     async def process_mentions_batch(self) -> dict:
         """
         Process mentions using agent architecture.
@@ -63,15 +92,14 @@ class MentionAgentHandler:
         Returns:
             Summary of what happened.
         """
-        logger.info("=" * 60)
-        logger.info("[MENTIONS] Starting agent-based mention processing")
-        logger.info("=" * 60)
+        start_time = time.time()
+        logger.info("[MENTIONS] === Starting batch processing ===")
 
         # Step 1: Tier check
         if self.tier_manager:
             can_use, reason = self.tier_manager.can_use_mentions()
             if not can_use:
-                logger.warning(f"[MENTIONS] Mentions blocked: {reason}")
+                logger.warning(f"[MENTIONS] Blocked: {reason}")
                 return {
                     "success": False,
                     "error": f"mentions_blocked: {reason}",
@@ -79,15 +107,18 @@ class MentionAgentHandler:
                 }
 
         # Step 2: Fetch mentions
+        logger.info("[MENTIONS] [1/4] Fetching mentions from Twitter...")
         try:
             mentions = self.twitter.get_mentions(since_id=None)
         except Exception as e:
-            logger.error(f"[MENTIONS] Failed to fetch mentions: {e}")
+            logger.error(f"[MENTIONS] [1/4] Fetch FAILED: {e}")
             return {"success": False, "error": str(e)}
 
         if not mentions:
-            logger.info("[MENTIONS] No mentions found")
+            logger.info("[MENTIONS] [1/4] No mentions found")
             return {"success": True, "found": 0, "processed": 0}
+
+        logger.info(f"[MENTIONS] [1/4] Found {len(mentions)} mentions")
 
         # Filter out already processed
         unprocessed = []
@@ -97,10 +128,10 @@ class MentionAgentHandler:
                 unprocessed.append(mention)
 
         if not unprocessed:
-            logger.info("[MENTIONS] All mentions already processed")
+            logger.info("[MENTIONS] [1/4] All mentions already processed")
             return {"success": True, "found": len(mentions), "processed": 0}
 
-        logger.info(f"[MENTIONS] Found {len(unprocessed)} unprocessed mentions")
+        logger.info(f"[MENTIONS] [1/4] Unprocessed: {len(unprocessed)}")
 
         # Filter by whitelist (for testing on main account)
         if MENTIONS_WHITELIST:
@@ -109,10 +140,9 @@ class MentionAgentHandler:
                 m for m in unprocessed
                 if m.get("user", {}).get("screen_name", "").lower() in whitelist_lower
             ]
-            logger.info(f"[MENTIONS] After whitelist filter: {len(unprocessed)} mentions (whitelist: {MENTIONS_WHITELIST})")
+            logger.info(f"[MENTIONS] [1/4] After whitelist: {len(unprocessed)} (whitelist: {MENTIONS_WHITELIST})")
 
             if not unprocessed:
-                logger.info("[MENTIONS] No mentions from whitelisted users")
                 return {
                     "success": True,
                     "found": len(mentions),
@@ -122,10 +152,11 @@ class MentionAgentHandler:
                 }
 
         # Step 3: LLM #1 - Select mentions worth replying to
+        logger.info("[MENTIONS] [2/4] Selecting mentions - calling LLM...")
         selected = await self._select_mentions(unprocessed)
 
         if not selected:
-            logger.info("[MENTIONS] No mentions selected for reply")
+            logger.info("[MENTIONS] [2/4] No mentions selected for reply")
             return {
                 "success": True,
                 "found": len(mentions),
@@ -134,11 +165,12 @@ class MentionAgentHandler:
                 "processed": 0
             }
 
-        logger.info(f"[MENTIONS] Selected {len(selected)} mentions for reply")
+        logger.info(f"[MENTIONS] [2/4] Selected {len(selected)} mentions for reply")
 
         # Step 4: Process each selected mention
+        logger.info("[MENTIONS] [3/4] Processing selected mentions...")
         results = []
-        for selection in selected:
+        for i, selection in enumerate(selected):
             tweet_id = selection["tweet_id"]
             mention = self._find_mention_by_id(unprocessed, tweet_id)
 
@@ -146,14 +178,23 @@ class MentionAgentHandler:
                 logger.warning(f"[MENTIONS] Could not find mention {tweet_id}")
                 continue
 
+            author = mention["user"]["screen_name"]
+            logger.info(f"[MENTIONS] [3/4] [{i+1}/{len(selected)}] Processing @{author}...")
+
             result = await self._process_single_mention(mention, selection)
             results.append(result)
 
+            if result.get("success"):
+                logger.info(f"[MENTIONS] [3/4] [{i+1}/{len(selected)}] @{author}: OK")
+            else:
+                logger.warning(f"[MENTIONS] [3/4] [{i+1}/{len(selected)}] @{author}: FAILED - {result.get('error')}")
+
         successful = sum(1 for r in results if r.get("success"))
 
-        logger.info("=" * 60)
-        logger.info(f"[MENTIONS] Completed: {successful}/{len(selected)} replies posted")
-        logger.info("=" * 60)
+        # Summary
+        duration = round(time.time() - start_time, 1)
+        logger.info(f"[MENTIONS] === Completed in {duration}s ===")
+        logger.info(f"[MENTIONS] Summary: found={len(mentions)} | selected={len(selected)} | replied={successful}")
 
         return {
             "success": True,
@@ -161,7 +202,8 @@ class MentionAgentHandler:
             "unprocessed": len(unprocessed),
             "selected": len(selected),
             "processed": successful,
-            "results": results
+            "results": results,
+            "duration_seconds": duration
         }
 
     async def _select_mentions(self, mentions: list[dict]) -> list[dict]:
@@ -227,62 +269,71 @@ Select which mentions to reply to. You can select multiple, one, or none."""
         author_handle = mention["user"]["screen_name"]
         author_text = mention["text"]
 
-        logger.info(f"[MENTIONS] Processing mention from @{author_handle}")
-        logger.info(f"[MENTIONS]   Text: {author_text[:100]}...")
-
         try:
             # Get conversation history with this user
             user_history = await self.db.get_user_mention_history(author_handle, limit=5)
 
             # LLM #2: Create plan
+            logger.info(f"[MENTIONS] @{author_handle}: Creating plan...")
             plan_result = await self._create_plan(
                 mention, selection, user_history
             )
 
             plan = plan_result.get("plan", [])
-            logger.info(f"[MENTIONS]   Plan: {len(plan)} tools")
+            tools_list = " -> ".join([s["tool"] for s in plan]) if plan else "none"
+            logger.info(f"[MENTIONS] @{author_handle}: Plan: {len(plan)} tools ({tools_list})")
+
+            # Validate plan
+            if plan:
+                try:
+                    self._validate_plan(plan)
+                except ValueError as e:
+                    logger.error(f"[MENTIONS] @{author_handle}: Invalid plan: {e}")
+                    return {"success": False, "error": f"invalid_plan: {e}", "tweet_id": tweet_id}
 
             # Execute tools
             image_bytes = None
-            tool_results = []
+            tools_used = []
             messages = self._build_initial_messages(mention, selection, user_history)
             messages.append({"role": "assistant", "content": json.dumps(plan_result)})
 
-            for step in plan:
+            for i, step in enumerate(plan):
                 tool_name = step["tool"]
                 params = step["params"]
-
-                logger.info(f"[MENTIONS]   Executing: {tool_name}")
+                tools_used.append(tool_name)
 
                 if tool_name not in TOOLS:
-                    logger.warning(f"[MENTIONS]   Unknown tool: {tool_name}")
+                    logger.warning(f"[MENTIONS] @{author_handle}: Unknown tool: {tool_name}")
                     continue
 
-                try:
-                    if tool_name == "web_search":
-                        result = await TOOLS[tool_name](params.get("query", ""))
-                        tool_results.append(f"web_search: {result['content'][:500]}")
-                        messages.append({
-                            "role": "user",
-                            "content": f"Tool result (web_search):\n{result['content']}"
-                        })
+                if tool_name == "web_search":
+                    query = params.get("query", "")
+                    logger.info(f"[MENTIONS] @{author_handle}: [{i+1}/{len(plan)}] web_search - query: {query[:40]}...")
 
-                    elif tool_name == "generate_image":
-                        image_bytes = await TOOLS[tool_name](params.get("prompt", ""))
-                        tool_results.append("generate_image: Image generated")
-                        messages.append({
-                            "role": "user",
-                            "content": "Tool result (generate_image): Image generated successfully."
-                        })
+                    result = await TOOLS[tool_name](query)
 
-                except Exception as e:
-                    logger.error(f"[MENTIONS]   Tool error: {e}")
-                    messages.append({
-                        "role": "user",
-                        "content": f"Tool error ({tool_name}): {e}"
-                    })
+                    if result.get("error"):
+                        logger.warning(f"[MENTIONS] @{author_handle}: web_search: FAILED")
+                        messages.append({"role": "user", "content": f"Tool result (web_search): {result['content']}"})
+                    else:
+                        logger.info(f"[MENTIONS] @{author_handle}: web_search: OK ({len(result['sources'])} sources)")
+                        messages.append({"role": "user", "content": f"Tool result (web_search):\n{result['content']}"})
+
+                elif tool_name == "generate_image":
+                    prompt = params.get("prompt", "")
+                    logger.info(f"[MENTIONS] @{author_handle}: [{i+1}/{len(plan)}] generate_image - prompt: {prompt[:40]}...")
+
+                    image_bytes = await TOOLS[tool_name](prompt)
+
+                    if image_bytes:
+                        logger.info(f"[MENTIONS] @{author_handle}: generate_image: OK ({len(image_bytes)} bytes)")
+                        messages.append({"role": "user", "content": "Tool result (generate_image): Image generated successfully."})
+                    else:
+                        logger.warning(f"[MENTIONS] @{author_handle}: generate_image: FAILED - continuing without image")
+                        messages.append({"role": "user", "content": "Tool result (generate_image): Failed. Continue without image."})
 
             # LLM #3: Generate reply
+            logger.info(f"[MENTIONS] @{author_handle}: Generating reply...")
             messages.append({
                 "role": "user",
                 "content": "Now write your final reply (max 280 characters)."
@@ -292,14 +343,14 @@ Select which mentions to reply to. You can select multiple, one, or none."""
             reply_text = reply_result.get("reply_text", "").strip()
 
             if not reply_text:
-                logger.warning(f"[MENTIONS]   Empty reply generated")
+                logger.warning(f"[MENTIONS] @{author_handle}: Empty reply generated")
                 return {"success": False, "error": "empty_reply", "tweet_id": tweet_id}
 
             # Truncate if needed
             if len(reply_text) > 280:
                 reply_text = reply_text[:277] + "..."
 
-            logger.info(f"[MENTIONS]   Reply: {reply_text}")
+            logger.info(f"[MENTIONS] @{author_handle}: Reply: {reply_text[:50]}... ({len(reply_text)} chars)")
 
             # Upload image if generated
             media_ids = None
@@ -307,23 +358,24 @@ Select which mentions to reply to. You can select multiple, one, or none."""
                 try:
                     media_id = await self.twitter.upload_media(image_bytes)
                     media_ids = [media_id]
-                    logger.info(f"[MENTIONS]   Image uploaded: {media_id}")
+                    logger.info(f"[MENTIONS] @{author_handle}: Image uploaded")
                 except Exception as e:
-                    logger.error(f"[MENTIONS]   Image upload failed: {e}")
+                    logger.error(f"[MENTIONS] @{author_handle}: Image upload FAILED: {e}")
+                    image_bytes = None
 
             # Post reply
             await self.twitter.reply(reply_text, tweet_id, media_ids=media_ids)
-            logger.info(f"[MENTIONS]   Reply posted!")
+            logger.info(f"[MENTIONS] @{author_handle}: Reply posted!")
 
             # Save to database
-            tools_used = ",".join([s["tool"] for s in plan]) if plan else None
+            tools_used_str = ",".join(tools_used) if tools_used else None
             await self.db.save_mention(
                 tweet_id=tweet_id,
                 author_handle=author_handle,
                 author_text=author_text,
                 our_reply=reply_text,
                 action="agent_replied",
-                tools_used=tools_used
+                tools_used=tools_used_str
             )
 
             return {
@@ -331,12 +383,12 @@ Select which mentions to reply to. You can select multiple, one, or none."""
                 "tweet_id": tweet_id,
                 "author": author_handle,
                 "reply": reply_text,
-                "tools_used": tools_used,
+                "tools_used": tools_used_str,
                 "has_image": image_bytes is not None
             }
 
         except Exception as e:
-            logger.error(f"[MENTIONS]   Error processing mention: {e}")
+            logger.error(f"[MENTIONS] @{author_handle}: Error: {e}")
             logger.exception(e)
             return {"success": False, "error": str(e), "tweet_id": tweet_id}
 

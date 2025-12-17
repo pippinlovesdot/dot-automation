@@ -49,6 +49,7 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
 
     Returns:
         Dict with 'content' (search summary) and 'sources' (list of citations).
+        On error, returns dict with 'error': True flag.
     """
     logger.info(f"[WEB_SEARCH] Starting search: {query}")
 
@@ -67,14 +68,15 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
 
     logger.info(f"[WEB_SEARCH] Sending request to OpenRouter with plugins: web")
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            OPENROUTER_URL,
-            headers=get_openrouter_headers(),
-            json=payload
-        )
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                OPENROUTER_URL,
+                headers=get_openrouter_headers(),
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
 
         logger.info(f"[WEB_SEARCH] Response received")
 
@@ -99,3 +101,13 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
             "content": content,
             "sources": sources
         }
+
+    except httpx.TimeoutException:
+        logger.error(f"[WEB_SEARCH] Timeout after 60s")
+        return {"content": "Search timed out", "sources": [], "error": True}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[WEB_SEARCH] API error: {e.response.status_code}")
+        return {"content": f"Search failed: HTTP {e.response.status_code}", "sources": [], "error": True}
+    except Exception as e:
+        logger.error(f"[WEB_SEARCH] Unexpected error: {e}")
+        return {"content": f"Search failed: {e}", "sources": [], "error": True}

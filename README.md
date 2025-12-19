@@ -315,7 +315,8 @@ Agent thinks: "I want to post about crypto trends with a visual"
 
 **Configuration:**
 - `POST_INTERVAL_MINUTES` — Time between auto-posts (default: 30)
-- `ENABLE_IMAGE_GENERATION` — Set to `false` to disable all image generation
+- `ENABLE_IMAGE_GENERATION` — Set to `false` to disable image generation (hides tool from agent)
+- `ALLOW_MENTIONS` — Set to `false` to disable mentions (hides mention tools from agent)
 
 ### Unified Agent (`services/unified_agent.py`) — v1.4.0
 

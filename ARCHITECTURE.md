@@ -130,9 +130,12 @@ Key settings:
 - `post_interval_minutes` — autopost frequency (default: 30)
 - `mentions_interval_minutes` — mention check frequency (default: 20)
 - `enable_image_generation` — toggle for image generation (default: true)
+- `allow_mentions` — toggle for mentions/replies (default: true)
+- `use_unified_agent` — use unified agent mode (default: true)
+- `agent_interval_minutes` — unified agent cycle frequency (default: 30)
 
 ### config/personality/
-Modular character definition split into three files:
+Modular character definition split into files:
 
 **`backstory.py`** — `BACKSTORY` constant
 - Origin story and background
@@ -148,9 +151,17 @@ Modular character definition split into three files:
 - What NOT to do
 - Example tweets
 
+**`sample_tweets.py`** — `SAMPLE_TWEETS` constant (optional)
+- List of previous tweets to avoid repetition
+- Populate `SAMPLE_TWEETS_LIST` to use
+
+**`never_say.py`** — `NEVER_SAY` constant (optional)
+- Topics/content to never mention
+- Populate `NEVER_SAY_CONTENT` to use
+
 **`__init__.py`** — Combines all parts into `SYSTEM_PROMPT`:
 ```python
-SYSTEM_PROMPT = BACKSTORY + BELIEFS + INSTRUCTIONS
+SYSTEM_PROMPT = BACKSTORY + BELIEFS + INSTRUCTIONS + NEVER_SAY + SAMPLE_TWEETS
 ```
 
 **To change the bot's personality, edit the individual files.**

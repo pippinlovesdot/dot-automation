@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     use_unified_agent: bool = True
     agent_interval_minutes: int = 30
 
+    # Feature toggles
+    allow_mentions: bool = True  # Set to false to disable mentions even if tier allows
+
 
 # Global settings instance
 settings = Settings()

@@ -17,7 +17,16 @@ import pkgutil
 from pathlib import Path
 from typing import Callable
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
+
+# Tools that require image generation to be enabled
+IMAGE_TOOLS = {"generate_image"}
+# Params that require image generation to be enabled
+IMAGE_PARAMS = {"include_image"}
+# Tools that require mentions to be enabled
+MENTION_TOOLS = {"get_mentions", "create_reply"}
 
 
 def _discover_tools_from_folder(folder_name: str) -> dict[str, dict]:
@@ -98,6 +107,14 @@ def get_tools_for_mode(mode: str, tier: str = "basic+") -> dict[str, dict]:
         folder = tool["folder"]
         config = tool["config"]
 
+        # Skip image tools if image generation is disabled
+        if name in IMAGE_TOOLS and not settings.enable_image_generation:
+            continue
+
+        # Skip mention tools if mentions are disabled
+        if name in MENTION_TOOLS and not settings.allow_mentions:
+            continue
+
         # Check if tool is available for this mode
         if mode == "legacy":
             if folder in ["shared", "legacy"]:
@@ -140,9 +157,15 @@ def get_tools_description_for_mode(mode: str, tier: str = "basic+") -> str:
 
         lines.append(f"{i}. **{name}** - {desc}")
 
-        if params:
+        # Filter out image params if image generation is disabled
+        filtered_params = {
+            pname: pinfo for pname, pinfo in params.items()
+            if pname not in IMAGE_PARAMS or settings.enable_image_generation
+        }
+
+        if filtered_params:
             lines.append("   - params:")
-            for pname, pinfo in params.items():
+            for pname, pinfo in filtered_params.items():
                 if isinstance(pinfo, dict):
                     ptype = pinfo.get("type", "string")
                     pdesc = pinfo.get("description", "")
@@ -186,6 +209,10 @@ def get_tools_params_schema() -> dict:
     for tool in ALL_TOOLS.values():
         params = tool["config"].get("params", {})
         for pname, pinfo in params.items():
+            # Skip image params if image generation is disabled
+            if pname in IMAGE_PARAMS and not settings.enable_image_generation:
+                continue
+
             if pname not in all_params:
                 if isinstance(pinfo, dict):
                     all_params[pname] = {"type": pinfo.get("type", "string")}

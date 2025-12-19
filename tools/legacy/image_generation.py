@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from config.models import IMAGE_MODEL
+from config.settings import settings
 from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,11 @@ async def generate_image(prompt: str, **kwargs) -> bytes | None:
     Returns:
         Raw image bytes (PNG format), or None on error.
     """
+    # Check if image generation is enabled
+    if not settings.enable_image_generation:
+        logger.info("[IMAGE_GEN] Image generation is disabled")
+        return None
+
     logger.info(f"[IMAGE_GEN] Starting generation for prompt: {prompt[:100]}...")
 
     reference_images = _get_reference_images()

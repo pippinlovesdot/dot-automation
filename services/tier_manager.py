@@ -255,6 +255,10 @@ class TierManager:
         Returns:
             Tuple of (can_use, reason_if_not).
         """
+        # Check if mentions are disabled via settings
+        if not settings.allow_mentions:
+            return False, "mentions_disabled_in_settings"
+
         if not self.is_initialized:
             return True, None  # Allow if not initialized
 

@@ -494,7 +494,7 @@ Handles all Twitter API interactions using tweepy.
 - [x] Multi-model LLM support via OpenRouter
 - [x] Image generation integration
 - [x] Mention handling with tool calling
-- [ ] **Web platform launch** ← Next week
+- [ ] **Web platform launch** ← today
 
 ---
 

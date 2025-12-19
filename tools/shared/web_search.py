@@ -15,41 +15,30 @@ from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
 
-# Tool schema for auto-discovery
-TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "Search the web for current information. Use this when you need to find recent news, events, prices, facts, or any information that might not be in your training data.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to look up"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of search results (1-10, default 5)"
-                }
-            },
-            "required": ["query"]
+# Tool configuration for auto-discovery
+TOOL_CONFIG = {
+    "name": "web_search",
+    "description": "Search the web for current information, news, facts, or any data that might not be in training data",
+    "params": {
+        "query": {
+            "type": "string",
+            "description": "The search query",
+            "required": True
         }
     }
 }
 
 
-async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
+async def web_search(query: str, **kwargs) -> str:
     """
     Search the web using OpenRouter's native web search plugin.
 
     Args:
         query: Search query string.
-        max_results: Maximum number of search results (1-10, default 5).
+        **kwargs: Additional context (twitter, db) - not used here.
 
     Returns:
-        Dict with 'content' (search summary) and 'sources' (list of citations).
-        On error, returns dict with 'error': True flag.
+        Formatted string with search results.
     """
     logger.info(f"[WEB_SEARCH] Starting search: {query}")
 
@@ -61,12 +50,10 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
         "plugins": [
             {
                 "id": "web",
-                "max_results": max_results
+                "max_results": 5
             }
         ]
     }
-
-    logger.info(f"[WEB_SEARCH] Sending request to OpenRouter with plugins: web")
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -88,26 +75,18 @@ async def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
         for annotation in message.get("annotations", []):
             if annotation.get("type") == "url_citation":
                 citation = annotation.get("url_citation", {})
-                sources.append({
-                    "url": citation.get("url", ""),
-                    "title": citation.get("title", ""),
-                    "snippet": citation.get("content", "")
-                })
+                sources.append(citation.get("title", ""))
 
         logger.info(f"[WEB_SEARCH] Completed: {len(sources)} sources found")
-        logger.info(f"[WEB_SEARCH] Content preview: {content[:200]}...")
 
-        return {
-            "content": content,
-            "sources": sources
-        }
+        return f"Search results:\n{content}\n\nSources: {len(sources)}"
 
     except httpx.TimeoutException:
         logger.error(f"[WEB_SEARCH] Timeout after 60s")
-        return {"content": "Search timed out", "sources": [], "error": True}
+        return "Error: Search timed out"
     except httpx.HTTPStatusError as e:
         logger.error(f"[WEB_SEARCH] API error: {e.response.status_code}")
-        return {"content": f"Search failed: HTTP {e.response.status_code}", "sources": [], "error": True}
+        return f"Error: Search failed (HTTP {e.response.status_code})"
     except Exception as e:
         logger.error(f"[WEB_SEARCH] Unexpected error: {e}")
-        return {"content": f"Search failed: {e}", "sources": [], "error": True}
+        return f"Error: Search failed - {e}"

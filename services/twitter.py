@@ -189,3 +189,38 @@ class TwitterClient:
         except Exception as e:
             logger.error(f"Error fetching mentions: {e}")
             raise
+
+    def get_user_profile(self, username: str) -> dict[str, Any] | None:
+        """
+        Get Twitter user profile by username.
+
+        Args:
+            username: Twitter handle (without @).
+
+        Returns:
+            User profile data or None if not found.
+        """
+        try:
+            response = self.client.get_user(
+                username=username,
+                user_fields=["description", "public_metrics", "created_at", "location"]
+            )
+
+            if not response.data:
+                logger.info(f"User @{username} not found")
+                return None
+
+            user = response.data
+            metrics = user.public_metrics or {}
+            return {
+                "username": user.username,
+                "bio": user.description or "",
+                "followers": metrics.get("followers_count", 0),
+                "following": metrics.get("following_count", 0),
+                "tweets": metrics.get("tweet_count", 0),
+                "location": user.location or ""
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting profile @{username}: {e}")
+            return None

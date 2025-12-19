@@ -27,23 +27,31 @@ TIER_CAPS = {
 TIER_FEATURES = {
     "free": {
         "mentions": False,
-        "post_limit": 500,      # Posts per month
-        "read_limit": 100
+        "post_limit": 500,           # Posts per month
+        "read_limit": 100,
+        "daily_post_limit": 15,      # ~500/30
+        "daily_reply_limit": 0       # No mentions on free
     },
     "basic": {
         "mentions": True,
         "post_limit": 3_000,
-        "read_limit": 10_000
+        "read_limit": 10_000,
+        "daily_post_limit": 50,      # ~100/day split
+        "daily_reply_limit": 50
     },
     "pro": {
         "mentions": True,
         "post_limit": 300_000,
-        "read_limit": 1_000_000
+        "read_limit": 1_000_000,
+        "daily_post_limit": 500,
+        "daily_reply_limit": 500
     },
     "enterprise": {
         "mentions": True,
-        "post_limit": None,     # Custom
-        "read_limit": 10_000_000
+        "post_limit": None,          # Custom
+        "read_limit": 10_000_000,
+        "daily_post_limit": 1000,
+        "daily_reply_limit": 1000
     }
 }
 
@@ -256,6 +264,22 @@ class TierManager:
             return False, f"mentions_not_available_on_{self.tier}_tier"
 
         return True, None
+
+    def get_daily_limits(self) -> tuple[int, int]:
+        """
+        Get daily post and reply limits based on current tier.
+
+        Returns:
+            Tuple of (daily_post_limit, daily_reply_limit).
+        """
+        # Default to free tier limits if not initialized
+        tier = self.tier or "free"
+        features = TIER_FEATURES.get(tier, TIER_FEATURES["free"])
+
+        return (
+            features.get("daily_post_limit", 15),
+            features.get("daily_reply_limit", 0)
+        )
 
     def resume(self) -> None:
         """Resume operations after pause."""

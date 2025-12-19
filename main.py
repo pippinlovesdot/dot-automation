@@ -16,6 +16,7 @@ from services.database import Database
 from services.autopost import AutoPostService
 from services.mentions import MentionHandler
 from services.tier_manager import TierManager
+from services.unified_agent import UnifiedAgent
 
 # Configure logging
 logging.basicConfig(
@@ -30,12 +31,13 @@ scheduler = AsyncIOScheduler()
 autopost_service: AutoPostService | None = None
 mention_handler: MentionHandler | None = None
 tier_manager: TierManager | None = None
+unified_agent: UnifiedAgent | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
-    global autopost_service, mention_handler, tier_manager
+    global autopost_service, mention_handler, tier_manager, unified_agent
 
     # Startup
     logger.info("Starting application...")
@@ -51,6 +53,7 @@ async def lifespan(app: FastAPI):
     # Initialize services with tier manager
     autopost_service = AutoPostService(db, tier_manager)
     mention_handler = MentionHandler(db, tier_manager)
+    unified_agent = UnifiedAgent(db, tier_manager)
     logger.info("Services initialized")
 
     # Check connected Twitter account
@@ -64,28 +67,49 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to get Twitter account info: {e}")
 
-    # Schedule autopost
-    scheduler.add_job(
-        autopost_service.run,
-        "interval",
-        minutes=settings.post_interval_minutes,
-        id="autopost"
-    )
-    logger.info(f"Scheduled autopost every {settings.post_interval_minutes} minutes")
+    # Check which mode to use
+    if settings.use_unified_agent:
+        # NEW: Unified Agent mode
+        logger.info("=" * 50)
+        logger.info("MODE: UNIFIED AGENT (new architecture)")
+        logger.info("=" * 50)
 
-    # Schedule mentions processing only if tier supports it
-    can_mentions, mentions_reason = tier_manager.can_use_mentions()
-    if can_mentions:
         scheduler.add_job(
-            mention_handler.check_mentions,
+            unified_agent.run,
             "interval",
-            minutes=settings.mentions_interval_minutes,
-            id="mentions",
-            kwargs={"dry_run": False}
+            minutes=settings.agent_interval_minutes,
+            id="unified_agent"
         )
-        logger.info(f"Scheduled mentions every {settings.mentions_interval_minutes} minutes")
+        logger.info(f"Scheduled unified agent every {settings.agent_interval_minutes} minutes")
+
     else:
-        logger.info(f"Mentions scheduling skipped: {mentions_reason}")
+        # LEGACY: Separate autopost + mentions
+        logger.info("=" * 50)
+        logger.info("MODE: LEGACY (autopost + mentions)")
+        logger.info("=" * 50)
+
+        # Schedule autopost
+        scheduler.add_job(
+            autopost_service.run,
+            "interval",
+            minutes=settings.post_interval_minutes,
+            id="autopost"
+        )
+        logger.info(f"Scheduled autopost every {settings.post_interval_minutes} minutes")
+
+        # Schedule mentions processing only if tier supports it
+        can_mentions, mentions_reason = tier_manager.can_use_mentions()
+        if can_mentions:
+            scheduler.add_job(
+                mention_handler.check_mentions,
+                "interval",
+                minutes=settings.mentions_interval_minutes,
+                id="mentions",
+                kwargs={"dry_run": False}
+            )
+            logger.info(f"Scheduled mentions every {settings.mentions_interval_minutes} minutes")
+        else:
+            logger.info(f"Mentions scheduling skipped: {mentions_reason}")
 
     # Schedule hourly tier check (auto-detect subscription upgrades)
     scheduler.add_job(
@@ -95,7 +119,7 @@ async def lifespan(app: FastAPI):
         id="tier_refresh"
     )
     scheduler.start()
-    logger.info("Scheduler started (autopost + mentions + tier refresh)")
+    logger.info("Scheduler started")
 
     yield
 
@@ -203,7 +227,7 @@ async def verify_webhook(crc_token: str = None):
 @app.post("/trigger-post")
 async def trigger_post():
     """
-    Trigger agent-based autopost.
+    Trigger agent-based autopost (legacy mode).
 
     The agent will:
     1. Create a plan (which tools to use)
@@ -227,6 +251,36 @@ async def trigger_post():
 
     except Exception as e:
         logger.error(f"ENDPOINT: Error in post: {e}")
+        logger.exception(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/trigger-agent")
+async def trigger_agent():
+    """
+    Trigger unified agent cycle.
+
+    The agent will:
+    1. Load context (recent actions, rate limits)
+    2. Use tools to decide what to do (post, reply, search, etc.)
+    3. Execute actions until calling finish_cycle
+    """
+    if unified_agent is None:
+        raise HTTPException(status_code=503, detail="Unified agent not initialized")
+
+    try:
+        logger.info("=" * 60)
+        logger.info("ENDPOINT: /trigger-agent called")
+        logger.info("=" * 60)
+
+        result = await unified_agent.run()
+
+        logger.info(f"ENDPOINT: Unified agent result: {result}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"ENDPOINT: Error in unified agent: {e}")
         logger.exception(e)
         raise HTTPException(status_code=500, detail=str(e))
 

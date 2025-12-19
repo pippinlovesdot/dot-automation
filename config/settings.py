@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     mentions_interval_minutes: int = 20
     enable_image_generation: bool = True
 
+    # Unified Agent (new architecture)
+    use_unified_agent: bool = True
+    agent_interval_minutes: int = 30
+
 
 # Global settings instance
 settings = Settings()

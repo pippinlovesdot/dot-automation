@@ -25,7 +25,8 @@ from config.prompts.mention_reply_agent import MENTION_REPLY_AGENT_PROMPT
 from config.schemas import (
     MENTION_SELECTION_SCHEMA,
     MENTION_PLAN_SCHEMA,
-    REPLY_TEXT_SCHEMA
+    REPLY_TEXT_SCHEMA,
+    TOOL_REACTION_SCHEMA
 )
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,13 @@ Select which mentions to reply to. You can select multiple, one, or none."""
                     else:
                         logger.warning(f"[MENTIONS] @{author_handle}: generate_image: FAILED - continuing without image")
                         messages.append({"role": "user", "content": "Tool result (generate_image): Failed. Continue without image."})
+
+                # Step-by-step: LLM reacts to tool result
+                logger.info(f"[MENTIONS] @{author_handle}: [{i+1}/{len(plan)}] Getting LLM reaction...")
+                reaction = await self.llm.chat(messages, TOOL_REACTION_SCHEMA)
+                thinking = reaction.get("thinking", "")
+                logger.info(f"[MENTIONS] @{author_handle}: [{i+1}/{len(plan)}] Thinking: {thinking[:80]}...")
+                messages.append({"role": "assistant", "content": thinking})
 
             # LLM #3: Generate reply
             logger.info(f"[MENTIONS] @{author_handle}: Generating reply...")

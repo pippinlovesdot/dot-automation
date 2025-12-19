@@ -18,7 +18,7 @@ from services.twitter import TwitterClient
 from tools.registry import TOOLS, get_tools_description
 from config.personality import SYSTEM_PROMPT
 from config.prompts.agent_autopost import AUTOPOST_AGENT_PROMPT
-from config.schemas import PLAN_SCHEMA, POST_TEXT_SCHEMA
+from config.schemas import PLAN_SCHEMA, POST_TEXT_SCHEMA, TOOL_REACTION_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ Now create your plan. What tools do you need (if any)?"""}
             # Step 4: Validate plan
             self._validate_plan(plan)
 
-            # Step 5: Execute plan (each tool result goes back as user message)
-            logger.info("[AUTOPOST] [3/5] Executing tools...")
+            # Step 5: Execute plan with step-by-step LLM reactions
+            logger.info("[AUTOPOST] [3/5] Executing tools (step-by-step)...")
             image_bytes = None
             tools_used = []
 
@@ -172,6 +172,13 @@ Sources found: {len(result['sources'])}"""
                     else:
                         logger.warning(f"[AUTOPOST] [3/5] generate_image: FAILED - continuing without image")
                         messages.append({"role": "user", "content": "Tool result (generate_image): Failed to generate image. Continue without it."})
+
+                # Step-by-step: LLM reacts to tool result
+                logger.info(f"[AUTOPOST] [3/5] [{i+1}/{len(plan)}] Getting LLM reaction...")
+                reaction = await self.llm.chat(messages, TOOL_REACTION_SCHEMA)
+                thinking = reaction.get("thinking", "")
+                logger.info(f"[AUTOPOST] [3/5] [{i+1}/{len(plan)}] Thinking: {thinking[:80]}...")
+                messages.append({"role": "assistant", "content": thinking})
 
             # Step 6: Get final post text
             logger.info("[AUTOPOST] [4/5] Generating tweet - calling LLM...")

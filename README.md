@@ -113,7 +113,10 @@ Each layer feeds into the next. Your agent behaves consistently across thousands
 
 ## Architecture
 
-The system operates on **two autonomous agent triggers**:
+The system supports **two modes** of operation:
+
+### Legacy Mode (Default)
+Two separate autonomous agents running on different schedules:
 
 | Scheduled Posts (Agent) | Mention Responses (Agent) |
 |-------------------------|---------------------------|
@@ -122,11 +125,19 @@ The system operates on **two autonomous agent triggers**:
 | Dynamic tool usage (web search, image generation) | 3 LLM calls per mention (select → plan → reply) |
 | Posts to Twitter with optional media | Tracks tools used per reply |
 
-**Agent Architecture:** Both systems use autonomous agents that decide which tools to use based on context. The mention agent can process multiple mentions per batch, creating individual plans for each selected mention.
+### Unified Agent Mode (v1.4.0)
+A single agent that handles both posting and replying in one cycle:
 
-**Auto-Discovery Tools:** Tools are automatically discovered from the `tools/` directory. Add a new tool file with `TOOL_SCHEMA` and it's available to agents without any registry changes.
+| Feature | Description |
+|---------|-------------|
+| Single cycle | Agent decides what to do (post, reply, or both) |
+| Tool-based actions | Uses tools like `get_mentions`, `create_post`, `create_reply` |
+| Step-by-step | LLM decides after each tool execution |
+| Rate limiting | Self-imposed daily limits for posts and replies |
 
-This separation keeps the codebase simple while enabling both proactive and reactive behavior.
+**Enable with:** `USE_UNIFIED_AGENT=true` in environment variables.
+
+**Auto-Discovery Tools:** Tools are organized into folders (`shared/`, `legacy/`, `unified/`) and automatically discovered on startup. Each tool has a `TOOL_CONFIG` with description that's injected into prompts.
 
 ---
 
@@ -142,7 +153,7 @@ This separation keeps the codebase simple while enabling both proactive and reac
 
 🎨 **Image Generation** — Creates visuals matching agent's style and current context. Supports multiple providers.
 
-🔧 **Extensible Tools** — Plug in web search, external APIs, blockchain data, custom integrations. The tool system is designed for expansion.
+🔧 **Extensible Tools** — Plug in web search, profile lookup, conversation history, and more. Add custom tools to the appropriate folder and they're auto-discovered.
 
 📦 **Production-Ready** — Clean async Python with type hints. Add API keys and deploy — no additional setup required.
 
@@ -226,7 +237,7 @@ my-agent/
 │   │   └── instructions.py  # Communication style
 │   └── prompts/             # LLM prompts (modular)
 │       ├── agent_autopost.py         # Agent planning prompt
-│       ├── mention_selector.py       # Legacy mention selector (v1.2)
+│       ├── unified_agent.py          # Unified agent instructions (v1.4)
 │       ├── mention_selector_agent.py # Agent mention selection (v1.3)
 │       └── mention_reply_agent.py    # Agent reply planning (v1.3)
 │
@@ -236,15 +247,25 @@ my-agent/
 ├── services/
 │   ├── autopost.py          # Agent-based scheduled posting
 │   ├── mentions.py          # Mention/reply handler
+│   ├── unified_agent.py     # Unified agent (v1.4)
 │   ├── tier_manager.py      # Twitter API tier detection
 │   ├── llm.py               # OpenRouter client (generate, chat)
 │   ├── twitter.py           # Twitter API v2 integration
 │   └── database.py          # PostgreSQL for history + metrics
 │
 ├── tools/
-│   ├── registry.py          # Auto-discovery tool registry
-│   ├── web_search.py        # Web search via OpenRouter plugins
-│   └── image_generation.py  # Image generation with reference images
+│   ├── registry.py          # Auto-discovery from subfolders
+│   ├── shared/              # Tools for both modes
+│   │   ├── web_search.py    # Web search via OpenRouter
+│   │   ├── get_twitter_profile.py    # Get user profile info
+│   │   └── get_conversation_history.py # Chat history with user
+│   ├── legacy/              # Legacy mode only
+│   │   └── image_generation.py  # Image gen with references
+│   └── unified/             # Unified agent only
+│       ├── create_post.py   # Post with optional image
+│       ├── create_reply.py  # Reply to mention
+│       ├── get_mentions.py  # Fetch unread mentions
+│       └── finish_cycle.py  # End agent cycle
 │
 ├── main.py                  # FastAPI + APScheduler entry point
 ├── requirements.txt         # Dependencies
@@ -295,6 +316,33 @@ Agent thinks: "I want to post about crypto trends with a visual"
 **Configuration:**
 - `POST_INTERVAL_MINUTES` — Time between auto-posts (default: 30)
 - `ENABLE_IMAGE_GENERATION` — Set to `false` to disable all image generation
+
+### Unified Agent (`services/unified_agent.py`) — v1.4.0
+
+A single agent that handles both posting and replying in one cycle.
+
+**How it works:**
+1. Agent loads context (recent actions, rate limits, tier info)
+2. Agent decides what to do using available tools
+3. Loop until `finish_cycle` is called:
+   - LLM decides next action via Structured Output
+   - Execute tool (get_mentions, create_post, create_reply, etc.)
+   - Add result to conversation
+4. Repeat next cycle after configured interval
+
+**Available tools:**
+- `get_mentions` — fetch unread Twitter mentions
+- `create_post` — post with optional image
+- `create_reply` — reply to mention with optional image
+- `web_search` — search the web for current info
+- `get_twitter_profile` — get user profile info
+- `get_conversation_history` — get chat history with user
+- `finish_cycle` — end the current cycle
+
+**Configuration:**
+- `USE_UNIFIED_AGENT` — Set to `true` to enable (default: true)
+- `AGENT_INTERVAL_MINUTES` — Time between agent cycles (default: 30)
+- Daily limits are tier-based (Free: 15/0, Basic: 50/50, Pro: 500/500)
 
 ### Mention Handler (`services/mentions.py`)
 

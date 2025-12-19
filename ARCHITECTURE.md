@@ -41,6 +41,7 @@ config/
     instructions.py         # Communication style
   prompts/                  # LLM prompts
     agent_autopost.py       # Agent planning prompt
+    unified_agent.py        # Unified agent instructions (v1.4)
     mention_selector.py     # Mention handling prompt
 utils/
   __init__.py
@@ -49,15 +50,28 @@ services/
   __init__.py
   autopost.py               # Autoposting service (uses LLMClient)
   mentions.py               # Mention handling service
+  unified_agent.py          # Unified agent service (v1.4)
   tier_manager.py           # Twitter API tier detection and limits
   llm.py                    # LLM client (generate, generate_structured, chat)
   twitter.py                # Twitter API client
   database.py               # Database operations + metrics
 tools/
   __init__.py
-  registry.py               # Tool registry for function calling
-  web_search.py             # Web search via OpenRouter plugins
-  image_generation.py       # Image generation tool
+  registry.py               # Tool registry with auto-discovery
+  shared/                   # Tools for both legacy and unified modes
+    __init__.py
+    web_search.py           # Web search via OpenRouter
+    get_twitter_profile.py  # Get user profile info
+    get_conversation_history.py  # Get chat history with user
+  legacy/                   # Tools for legacy mode only
+    __init__.py
+    image_generation.py     # Image generation with references
+  unified/                  # Tools for unified agent only
+    __init__.py
+    create_post.py          # Create post with optional image
+    create_reply.py         # Reply to mention
+    get_mentions.py         # Fetch unread mentions
+    finish_cycle.py         # End agent cycle
 assets/                     # Reference images for generation
 .env.example                # Environment template
 requirements.txt            # Python dependencies
@@ -262,6 +276,53 @@ The agent operates in a continuous conversation, creating a plan and executing t
 - Tracks which tools were used for analytics
 - Plan validation (v1.3.2): max 3 tools, generate_image must be last
 
+### services/unified_agent.py (v1.4.0)
+`UnifiedAgent` class — new architecture that replaces separate autopost + mentions.
+
+**Key Features:**
+- Single agent that handles both posting and replying
+- Uses Structured Output (JSON Schema) for tool selection
+- Step-by-step execution with LLM deciding after each tool
+- Dynamic tool discovery from registry
+
+**Flow:**
+1. Load context (recent actions, rate limits, tier info)
+2. Build system prompt with available tools
+3. Loop (max 10 iterations):
+   a. LLM decides which tool to use via Structured Output
+   b. Execute tool (get_mentions, create_post, create_reply, etc.)
+   c. Add result to conversation
+   d. Repeat until LLM calls `finish_cycle`
+
+**Tool Decision Schema:**
+```json
+{
+  "thinking": "Reasoning about what to do next",
+  "tool": "get_mentions",
+  "params": {"limit": 10}
+}
+```
+
+**Available tools in unified mode:**
+- `get_mentions` — fetch unread Twitter mentions
+- `create_post` — post with optional image
+- `create_reply` — reply to mention with optional image
+- `web_search` — search the web
+- `get_twitter_profile` — get user profile info
+- `get_conversation_history` — get chat history with user
+- `finish_cycle` — end the agent cycle
+
+**Design decisions:**
+- Tools are auto-discovered from `tools/shared/` and `tools/unified/`
+- Each tool has a `TOOL_CONFIG` with name, description, params
+- Description is pulled into prompts automatically via registry
+- Tier-based filtering: some tools only available on Basic+ tier
+- Actions table tracks all posts and replies in one place
+
+**Mode switching:**
+- `USE_UNIFIED_AGENT=true` in env enables this mode
+- `USE_UNIFIED_AGENT=false` uses legacy autopost + mentions
+
 ### services/llm.py
 `LLMClient` class — async client for OpenRouter API.
 
@@ -345,49 +406,59 @@ TIER_FEATURES = {
 - `MentionHandler.process_mentions_batch()` calls `tier_manager.can_use_mentions()` before processing
 - Both services receive `tier_manager` instance via constructor
 
-### tools/registry.py
-Tool registry with **auto-discovery** (v1.3).
+### tools/registry.py (v1.4.0)
+Tool registry with **folder-based auto-discovery**.
 
 **How it works:**
-- Uses `pkgutil.iter_modules()` to scan all Python files in `tools/` directory
-- Each tool file that exports `TOOL_SCHEMA` is automatically registered
-- Tool function must have the same name as `schema["function"]["name"]`
+- Scans three folders: `shared/`, `legacy/`, `unified/`
+- Each tool file exports `TOOL_CONFIG` dict with name, description, params
+- Tool function must have the same name as `TOOL_CONFIG["name"]`
+- Mode-aware: different tools available for legacy vs unified modes
+
+**Folder structure:**
+- `tools/shared/` — available in both legacy and unified modes
+- `tools/legacy/` — only available in legacy mode (autopost.py, mentions.py)
+- `tools/unified/` — only available in unified agent mode
 
 **Exports:**
-- `TOOLS` — dict mapping tool names to async functions (auto-populated)
-- `TOOLS_SCHEMA` — list of JSON schemas in OpenAI function calling format (auto-populated)
-- `get_tools_description()` — generates human-readable tool descriptions for agent prompts
+- `ALL_TOOLS` — dict of all discovered tools
+- `TOOLS` — legacy compatibility dict for autopost.py
+- `get_tools_for_mode(mode, tier)` — get tools filtered by mode and tier
+- `get_tools_description_for_mode(mode, tier)` — human-readable tool descriptions
+- `get_tools_enum_for_mode(mode, tier)` — list of tool names for JSON schema
+- `get_tool_func(name)` — get tool function by name
 - `refresh_tools()` — re-scan tools at runtime
 
-**Available tools:**
-- `web_search` — real-time web search via OpenRouter plugins
-- `generate_image` — image generation using Gemini 3 Pro
+**Available tools by folder:**
+- **shared/**: `web_search`, `get_twitter_profile`, `get_conversation_history`
+- **legacy/**: `generate_image`
+- **unified/**: `create_post`, `create_reply`, `get_mentions`, `finish_cycle`
 
-**To add a new tool (zero registry changes needed):**
-1. Create `tools/my_tool.py`
-2. Add `TOOL_SCHEMA` constant with OpenAI function calling format
+**To add a new tool:**
+1. Create file in appropriate folder (e.g., `tools/shared/my_tool.py`)
+2. Add `TOOL_CONFIG` dict with name, description, params
 3. Create async function with matching name
 4. Done! Tool is auto-discovered on startup
 
 Example:
 ```python
-# tools/my_tool.py
-TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "my_tool",
-        "description": "What this tool does",
-        "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string", "description": "..."}},
-            "required": ["query"]
+# tools/shared/my_tool.py
+TOOL_CONFIG = {
+    "name": "my_tool",
+    "description": "What this tool does - used in prompts",
+    "params": {
+        "query": {
+            "type": "string",
+            "description": "Parameter description",
+            "required": True
         }
-    }
+    },
+    "tier": "all"  # or "basic+" for restricted
 }
 
-async def my_tool(query: str) -> dict:
-    # Implementation
-    return {"result": "..."}
+async def my_tool(query: str, **kwargs) -> str:
+    # kwargs contains: twitter, db, tier_manager
+    return "Result string"
 ```
 
 ### tools/web_search.py

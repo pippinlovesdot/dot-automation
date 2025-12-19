@@ -3,6 +3,8 @@ Image generation tool using OpenRouter API.
 
 Generates images based on text prompts and reference images from assets folder.
 Uses google/gemini-3-pro-image-preview model via OpenRouter.
+
+Used by Legacy autopost. Unified agent uses include_image flag in create_post.
 """
 
 import base64
@@ -16,30 +18,23 @@ from utils.api import OPENROUTER_URL, get_openrouter_headers
 
 logger = logging.getLogger(__name__)
 
-# Tool schema for auto-discovery
-TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "generate_image",
-        "description": "Generate an image based on a text description. Uses reference images from assets folder for consistent character appearance.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "Text description of the image to generate"
-                }
-            },
-            "required": ["prompt"]
+# Tool configuration for auto-discovery
+TOOL_CONFIG = {
+    "name": "generate_image",
+    "description": "Generate an image based on a text description using reference images for consistent character appearance",
+    "params": {
+        "prompt": {
+            "type": "string",
+            "description": "Text description of the image to generate",
+            "required": True
         }
     }
 }
 
 # Path to reference images folder
-ASSETS_PATH = Path(__file__).parent.parent / "assets"
+ASSETS_PATH = Path(__file__).parent.parent.parent / "assets"
 
 # System prompt for image generation
-# TODO: Replace with your actual image generation prompt
 IMAGE_SYSTEM_PROMPT = """You are an image generation assistant.
 
 Your task is to generate images based on:
@@ -57,12 +52,7 @@ Generate the image now based on the user's prompt."""
 
 
 def _get_reference_images() -> list[str]:
-    """
-    Get all reference images from assets folder as base64.
-
-    Returns:
-        List of base64-encoded images with data URI prefix.
-    """
+    """Get all reference images from assets folder as base64."""
     if not ASSETS_PATH.exists():
         logger.warning(f"[IMAGE_GEN] Assets folder not found: {ASSETS_PATH}")
         return []
@@ -76,7 +66,6 @@ def _get_reference_images() -> list[str]:
                 with open(file_path, "rb") as f:
                     image_data = f.read()
 
-                # Determine MIME type
                 ext = file_path.suffix.lower()
                 mime_types = {
                     ".png": "image/png",
@@ -88,12 +77,10 @@ def _get_reference_images() -> list[str]:
                 }
                 mime_type = mime_types.get(ext, "image/png")
 
-                # Create data URI
                 base64_data = base64.b64encode(image_data).decode()
                 data_uri = f"data:{mime_type};base64,{base64_data}"
                 images.append(data_uri)
 
-                logger.debug(f"[IMAGE_GEN] Loaded reference image: {file_path.name}")
             except Exception as e:
                 logger.error(f"[IMAGE_GEN] Error loading image {file_path}: {e}")
 
@@ -101,34 +88,27 @@ def _get_reference_images() -> list[str]:
     return images
 
 
-async def generate_image(prompt: str) -> bytes | None:
+async def generate_image(prompt: str, **kwargs) -> bytes | None:
     """
     Generate an image from a text prompt using reference images.
 
-    This is the main tool function for image generation.
-    Uses ALL reference images from assets/ folder for consistent character appearance.
-
     Args:
         prompt: Text description of the image to generate.
+        **kwargs: Additional context (not used).
 
     Returns:
         Raw image bytes (PNG format), or None on error.
     """
     logger.info(f"[IMAGE_GEN] Starting generation for prompt: {prompt[:100]}...")
 
-    # Use ALL reference images (not random selection)
     reference_images = _get_reference_images()
     logger.info(f"[IMAGE_GEN] Using ALL {len(reference_images)} reference images")
 
-    # Build content array with images and text
     content = []
-
     for image_uri in reference_images:
         content.append({
             "type": "image_url",
-            "image_url": {
-                "url": image_uri
-            }
+            "image_url": {"url": image_uri}
         })
 
     content.append({
@@ -136,18 +116,11 @@ async def generate_image(prompt: str) -> bytes | None:
         "text": prompt
     })
 
-    # Build request payload
     payload = {
         "model": IMAGE_MODEL,
         "messages": [
-            {
-                "role": "system",
-                "content": IMAGE_SYSTEM_PROMPT
-            },
-            {
-                "role": "user",
-                "content": content
-            }
+            {"role": "system", "content": IMAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": content}
         ]
     }
 
@@ -165,25 +138,22 @@ async def generate_image(prompt: str) -> bytes | None:
 
         logger.info(f"[IMAGE_GEN] Response received")
 
-        # Extract image from response - images are in message.images array
         message = data.get("choices", [{}])[0].get("message", {})
         images = message.get("images", [])
 
         if images:
-            # Get first image from images array
             image_url = images[0].get("image_url", {}).get("url", "")
             if image_url.startswith("data:"):
-                # Extract base64 from data URI (remove "data:image/...;base64," prefix)
                 base64_data = image_url.split(",", 1)[1]
                 image_bytes = base64.b64decode(base64_data)
                 logger.info(f"[IMAGE_GEN] Generated image: {len(image_bytes)} bytes")
                 return image_bytes
 
-        logger.error(f"[IMAGE_GEN] No image data in response: {list(message.keys())}")
+        logger.error(f"[IMAGE_GEN] No image data in response")
         return None
 
     except httpx.TimeoutException:
-        logger.error(f"[IMAGE_GEN] Timeout after 120s - prompt: {prompt[:50]}...")
+        logger.error(f"[IMAGE_GEN] Timeout after 120s")
         return None
     except httpx.HTTPStatusError as e:
         logger.error(f"[IMAGE_GEN] API error: {e.response.status_code}")

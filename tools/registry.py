@@ -1,107 +1,211 @@
 """
 Tool registry with auto-discovery.
 
-Automatically discovers tools from the tools/ directory.
+Discovers tools from subdirectories:
+- shared/   - available for both Legacy and Unified modes
+- legacy/   - Legacy autopost only
+- unified/  - Unified Agent only
+
 Each tool file should export:
-- TOOL_SCHEMA: OpenAI-style function calling schema
-- The function with the same name as schema["function"]["name"]
+- TOOL_CONFIG: dict with name, description, params, optional tier
+- An async function with the same name as TOOL_CONFIG["name"]
 """
 
 import importlib
 import logging
 import pkgutil
 from pathlib import Path
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
 
-def _discover_tools() -> tuple[dict, list]:
+def _discover_tools_from_folder(folder_name: str) -> dict[str, dict]:
     """
-    Auto-discover all tools in tools/ directory.
+    Discover tools from a specific folder.
 
-    Scans all Python modules in the tools/ directory and collects:
-    - Tool functions (callable)
-    - Tool schemas (for LLM function calling)
+    Args:
+        folder_name: Name of the folder (shared, legacy, unified).
 
     Returns:
-        Tuple of (tools dict, schemas list).
+        Dict mapping tool_name -> {config, func}.
     """
     tools = {}
-    schemas = []
+    folder_path = Path(__file__).parent / folder_name
 
-    tools_path = Path(__file__).parent
+    if not folder_path.exists():
+        logger.warning(f"[REGISTRY] Folder not found: {folder_path}")
+        return tools
 
-    for _, module_name, _ in pkgutil.iter_modules([str(tools_path)]):
-        # Skip registry and __init__
-        if module_name in ("registry", "__init__"):
+    for _, module_name, _ in pkgutil.iter_modules([str(folder_path)]):
+        if module_name.startswith("_"):
             continue
 
         try:
-            module = importlib.import_module(f"tools.{module_name}")
+            module = importlib.import_module(f"tools.{folder_name}.{module_name}")
 
-            # Check if module exports TOOL_SCHEMA
-            if hasattr(module, "TOOL_SCHEMA"):
-                schema = module.TOOL_SCHEMA
-                tool_name = schema["function"]["name"]
+            if hasattr(module, "TOOL_CONFIG"):
+                config = module.TOOL_CONFIG
+                tool_name = config["name"]
 
-                # Get the tool function
                 if hasattr(module, tool_name):
                     tool_func = getattr(module, tool_name)
-                    tools[tool_name] = tool_func
-                    schemas.append(schema)
-                    logger.debug(f"[REGISTRY] Discovered tool: {tool_name}")
+                    tools[tool_name] = {
+                        "config": config,
+                        "func": tool_func,
+                        "folder": folder_name
+                    }
+                    logger.debug(f"[REGISTRY] Discovered {folder_name}/{tool_name}")
                 else:
-                    logger.warning(
-                        f"[REGISTRY] Tool {module_name} has TOOL_SCHEMA "
-                        f"but no function named '{tool_name}'"
-                    )
-            else:
-                logger.debug(f"[REGISTRY] Skipping {module_name}: no TOOL_SCHEMA")
+                    logger.warning(f"[REGISTRY] {module_name} has TOOL_CONFIG but no function '{tool_name}'")
 
         except Exception as e:
-            logger.error(f"[REGISTRY] Error loading tool {module_name}: {e}")
+            logger.error(f"[REGISTRY] Error loading {folder_name}/{module_name}: {e}")
 
-    logger.info(f"[REGISTRY] Discovered {len(tools)} tools: {list(tools.keys())}")
-    return tools, schemas
-
-
-# Auto-discover tools on module load
-TOOLS, TOOLS_SCHEMA = _discover_tools()
+    return tools
 
 
-def get_tools_description() -> str:
+def _discover_all_tools() -> dict[str, dict]:
+    """Discover all tools from all folders."""
+    all_tools = {}
+
+    for folder in ["shared", "legacy", "unified"]:
+        folder_tools = _discover_tools_from_folder(folder)
+        all_tools.update(folder_tools)
+
+    logger.info(f"[REGISTRY] Discovered {len(all_tools)} tools: {list(all_tools.keys())}")
+    return all_tools
+
+
+# Auto-discover on module load
+ALL_TOOLS = _discover_all_tools()
+
+
+def get_tools_for_mode(mode: str, tier: str = "basic+") -> dict[str, dict]:
     """
-    Generate human-readable tools description from TOOLS_SCHEMA.
+    Get tools available for a specific mode.
 
-    Used in agent prompts so LLM knows what tools are available.
-    When you add a new tool with TOOL_SCHEMA, it automatically appears here.
+    Args:
+        mode: "legacy" or "unified"
+        tier: "free" or "basic+" (for filtering tier-restricted tools)
 
     Returns:
-        Formatted string describing all available tools.
+        Dict of available tools for this mode.
     """
-    lines = ["### Available Tools:"]
+    available = {}
 
-    for i, tool_def in enumerate(TOOLS_SCHEMA, 1):
-        func = tool_def["function"]
-        name = func["name"]
-        desc = func["description"]
-        params = func["parameters"]["properties"]
-        required = func["parameters"].get("required", [])
+    for name, tool in ALL_TOOLS.items():
+        folder = tool["folder"]
+        config = tool["config"]
 
-        lines.append(f"\n**{i}. {name}**")
-        lines.append(f"   {desc}")
-        lines.append(f"   Parameters:")
+        # Check if tool is available for this mode
+        if mode == "legacy":
+            if folder in ["shared", "legacy"]:
+                available[name] = tool
+        elif mode == "unified":
+            if folder in ["shared", "unified"]:
+                # Check tier restriction
+                tool_tier = config.get("tier", "all")
+                if tool_tier == "all" or (tool_tier == "basic+" and tier != "free"):
+                    available[name] = tool
 
-        for param_name, param_info in params.items():
-            req = "(required)" if param_name in required else "(optional)"
-            lines.append(f"   - {param_name}: {param_info['description']} {req}")
+    return available
+
+
+def get_tool_func(name: str) -> Callable | None:
+    """Get a tool function by name."""
+    if name in ALL_TOOLS:
+        return ALL_TOOLS[name]["func"]
+    return None
+
+
+def get_tools_description_for_mode(mode: str, tier: str = "basic+") -> str:
+    """
+    Generate human-readable tools description for prompts.
+
+    Args:
+        mode: "legacy" or "unified"
+        tier: "free" or "basic+"
+
+    Returns:
+        Formatted string describing available tools.
+    """
+    tools = get_tools_for_mode(mode, tier)
+    lines = ["## AVAILABLE TOOLS\n"]
+
+    for i, (name, tool) in enumerate(tools.items(), 1):
+        config = tool["config"]
+        desc = config["description"]
+        params = config.get("params", {})
+
+        lines.append(f"{i}. **{name}** - {desc}")
+
+        if params:
+            lines.append("   - params:")
+            for pname, pinfo in params.items():
+                if isinstance(pinfo, dict):
+                    ptype = pinfo.get("type", "string")
+                    pdesc = pinfo.get("description", "")
+                    required = pinfo.get("required", False)
+                    req_marker = " [REQUIRED]" if required else ""
+                    lines.append(f"     - {pname} ({ptype}){req_marker}: {pdesc}")
+                else:
+                    lines.append(f"     - {pname}")
+        else:
+            lines.append("   - params: none")
+
+        lines.append("")
 
     return "\n".join(lines)
 
 
+def get_tools_enum_for_mode(mode: str, tier: str = "basic+") -> list[str]:
+    """
+    Get list of tool names for JSON schema enum.
+
+    Args:
+        mode: "legacy" or "unified"
+        tier: "free" or "basic+"
+
+    Returns:
+        List of tool names.
+    """
+    tools = get_tools_for_mode(mode, tier)
+    return list(tools.keys())
+
+
+def get_tools_params_schema() -> dict:
+    """
+    Get combined params schema for all tools.
+
+    Returns:
+        Dict of all possible params across all tools.
+    """
+    all_params = {}
+
+    for tool in ALL_TOOLS.values():
+        params = tool["config"].get("params", {})
+        for pname, pinfo in params.items():
+            if pname not in all_params:
+                if isinstance(pinfo, dict):
+                    all_params[pname] = {"type": pinfo.get("type", "string")}
+                else:
+                    all_params[pname] = {"type": "string"}
+
+    return all_params
+
+
+# Legacy compatibility - expose TOOLS dict for autopost.py
+TOOLS = {name: tool["func"] for name, tool in get_tools_for_mode("legacy").items()}
+
+
+def get_tools_description() -> str:
+    """Legacy compatibility - get tools description for autopost."""
+    return get_tools_description_for_mode("legacy")
+
+
 def refresh_tools() -> None:
-    """
-    Re-discover tools (useful if tools are added at runtime).
-    """
-    global TOOLS, TOOLS_SCHEMA
-    TOOLS, TOOLS_SCHEMA = _discover_tools()
+    """Re-discover tools (useful if tools are added at runtime)."""
+    global ALL_TOOLS, TOOLS
+    ALL_TOOLS = _discover_all_tools()
+    TOOLS = {name: tool["func"] for name, tool in get_tools_for_mode("legacy").items()}

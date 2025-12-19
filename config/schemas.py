@@ -220,3 +220,25 @@ REPLY_TEXT_SCHEMA = {
         }
     }
 }
+
+# ==================== v1.4.0 Schemas ====================
+
+# Schema for agent reaction after tool execution (step-by-step)
+TOOL_REACTION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "tool_reaction",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "thinking": {
+                    "type": "string",
+                    "description": "Your thoughts about the tool result - what did you learn? how will this inform your post?"
+                }
+            },
+            "required": ["thinking"],
+            "additionalProperties": False
+        }
+    }
+}

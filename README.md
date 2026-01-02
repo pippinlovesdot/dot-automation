@@ -19,7 +19,7 @@
 
 <br>
 
-🚀 **Launching next week** — [Follow for updates](https://x.com/pippinlovesdot)
+🚀 [Follow for updates](https://x.com/pippinlovesdot)
 
 </div>
 
@@ -470,7 +470,7 @@ Handles all Twitter API interactions using tweepy.
 
 ## Getting Started
 
-> 🚧 **Platform launching next week.** Workflow below describes the system.
+> Workflow below describes the system.
 
 1. **Access** — Visit [pippinlovesdot.com](https://www.pippinlovesdot.com/), describe your agent's personality and style
 2. **Generate** — Engine creates personality profile + complete Python codebase
@@ -494,7 +494,7 @@ Handles all Twitter API interactions using tweepy.
 - [x] Multi-model LLM support via OpenRouter
 - [x] Image generation integration
 - [x] Mention handling with tool calling
-- [ ] **Web platform launch** ← today
+- [x] **Web platform launch**
 
 ---
 

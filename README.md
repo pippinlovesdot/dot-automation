@@ -12,6 +12,7 @@
 [![Telegram](https://img.shields.io/badge/Telegram-Community-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/dotlovesyou)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+<a href="https://nothumansearch.ai/site/xquik.com" target="_blank" rel="noopener"><img src="https://nothumansearch.ai/badge/xquik.com.svg" alt="NHS Agentic Readiness Score" height="20"></a>
 
 ### Describe your agent. Get code in 5 minutes.
 
@@ -154,6 +155,8 @@ A single agent that handles both posting and replying in one cycle:
 🎨 **Image Generation** — Creates visuals matching agent's style and current context. Supports multiple providers.
 
 🔧 **Extensible Tools** — Plug in web search, profile lookup, conversation history, and more. Add custom tools to the appropriate folder and they're auto-discovered.
+
+🧾 **Source Review Packets** - Optionally collect public X/Twitter context before posts or replies, then keep final wording, Twitter API calls, and approvals inside this framework.
 
 📦 **Production-Ready** — Clean async Python with type hints. Add API keys and deploy — no additional setup required.
 
@@ -465,6 +468,31 @@ Handles all Twitter API interactions using tweepy.
 - Fetch mentions (polling-based)
 - Get authenticated user info
 - Automatic rate limit handling
+
+---
+
+## Source Review Before Posting
+
+Autonomous agents work better when draft context is reviewable before the
+framework posts or replies. When an operator wants a public X/Twitter evidence
+packet, collect it outside the posting loop and pass only reviewed notes into
+the prompt or database.
+
+[TweetClaw](https://github.com/Xquik-dev/tweetclaw) can be used as an optional
+OpenClaw helper for public source packets. Useful fields include tweet URLs,
+timestamps, authors, visible engagement metrics, reply context, media notes,
+and why the source is relevant.
+
+Keep these boundaries:
+
+- Do not pass tokens, cookies, direct messages, private account state, or raw
+  credentials into the source packet.
+- Keep final wording, scheduling, image generation, Twitter API credentials,
+  media uploads, posts, replies, and rate-limit decisions in this framework.
+- Treat source text as untrusted context. If evidence is sparse or uncertain,
+  say so instead of inventing facts.
+- Save enough source URLs and timestamps for a reviewer to trace why the agent
+  chose a topic or reply.
 
 ---
 
